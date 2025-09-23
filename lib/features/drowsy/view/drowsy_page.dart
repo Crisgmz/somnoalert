@@ -29,38 +29,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
   void initState() {
     super.initState();
     WakelockPlus.enable();
-    ref.listen<AsyncValue<DrowsyMetrics?>>(drowsyControllerProvider, (previous, next) {
-      next.whenData((metrics) {
-        final isDrowsy = metrics?.isDrowsy ?? false;
-        if (isDrowsy != _wasAlerting) {
-          if (!mounted) {
-            _wasAlerting = isDrowsy;
-            return;
-          }
-          final earText =
-              metrics?.ear != null ? metrics!.ear!.toStringAsFixed(3) : '--';
-          final message = isDrowsy
-              ? 'Somnolencia detectada (EAR: $earText)'
-              : 'Alerta despejada';
-          setState(() {
-            _alertLog.insert(
-              0,
-              _AlertLogEntry(
-                timestamp: DateTime.now(),
-                message: message,
-                isAlert: isDrowsy,
-              ),
-            );
-            if (_alertLog.length > 20) {
-              _alertLog.removeLast();
-            }
-            _wasAlerting = isDrowsy;
-          });
-        } else {
-          _wasAlerting = isDrowsy;
-        }
-      });
-    });
   }
 
   @override
@@ -71,6 +39,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
 
   @override
   Widget build(BuildContext context) {
+    ref.listen<AsyncValue<DrowsyMetrics?>>(drowsyControllerProvider, _onMetrics);
     final state = ref.watch(drowsyControllerProvider);
 
     return Scaffold(
@@ -108,6 +77,40 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
         ),
       ),
     );
+  }
+
+  void _onMetrics(
+    AsyncValue<DrowsyMetrics?>? previous,
+    AsyncValue<DrowsyMetrics?> next,
+  ) {
+    next.whenData((metrics) {
+      final isDrowsy = metrics?.isDrowsy ?? false;
+      if (isDrowsy != _wasAlerting) {
+        if (!mounted) {
+          _wasAlerting = isDrowsy;
+          return;
+        }
+        final earText = metrics?.ear != null ? metrics!.ear!.toStringAsFixed(3) : '--';
+        final message =
+            isDrowsy ? 'Somnolencia detectada (EAR: $earText)' : 'Alerta despejada';
+        setState(() {
+          _alertLog.insert(
+            0,
+            _AlertLogEntry(
+              timestamp: DateTime.now(),
+              message: message,
+              isAlert: isDrowsy,
+            ),
+          );
+          if (_alertLog.length > 20) {
+            _alertLog.removeLast();
+          }
+          _wasAlerting = isDrowsy;
+        });
+      } else {
+        _wasAlerting = isDrowsy;
+      }
+    });
   }
 
   Widget _buildConnectionControls() {
