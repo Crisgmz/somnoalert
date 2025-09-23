@@ -1,0 +1,12 @@
+# Vision
+opencv-contrib-python==4.9.0.80
+numpy==1.26.4
+
+# MediaPipe (Windows, Py 3.10/3.11)
+mediapipe==0.10.14
+protobuf>=4.25.3,<5
+
+# Audio + API
+pygame
+fastapi
+uvicorn[standard]
