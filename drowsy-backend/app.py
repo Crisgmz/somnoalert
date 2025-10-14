@@ -6,7 +6,8 @@ import pygame
 import asyncio
 import json
 import base64
-from typing import Optional
+import time
+from typing import Optional, Dict, Any, List, Tuple
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import mediapipe as mp
@@ -31,6 +32,196 @@ W_POSE = float(os.getenv("W_POSE", "0.2"))
 FUSION_THRESHOLD = float(os.getenv("FUSION_THRESHOLD", "0.7"))
 
 USE_PYTHON_ALARM = os.getenv("USE_PYTHON_ALARM", "1") == "1"
+
+# =====================
+# Configuración de video
+# =====================
+CAMERA_INDEX = int(os.getenv("CAMERA_INDEX", "0"))
+CAMERA_WIDTH = int(os.getenv("CAMERA_WIDTH", "1280"))
+CAMERA_HEIGHT = int(os.getenv("CAMERA_HEIGHT", "720"))
+CAMERA_FPS = int(os.getenv("CAMERA_FPS", "30"))
+FRAME_ORIENTATION = os.getenv("FRAME_ORIENTATION", "none").lower()
+CAMERA_CODEC = os.getenv("CAMERA_CODEC", "MJPG").upper()
+
+_ENV_CODECS = [c.strip().upper() for c in os.getenv("CAMERA_CODECS", "MJPG,YUY2,H264,XVID").split(",") if c.strip()]
+
+def _unique_sequence(seq: List[Any]) -> List[Any]:
+    seen = set()
+    out = []
+    for item in seq:
+        key = tuple(item) if isinstance(item, (list, tuple)) else item
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+PREFERRED_CODECS: List[str] = _unique_sequence([CAMERA_CODEC] + _ENV_CODECS)
+
+DEFAULT_RESOLUTIONS: List[Tuple[int, int]] = _unique_sequence([
+    (CAMERA_WIDTH, CAMERA_HEIGHT),
+    (1920, 1080),
+    (1600, 900),
+    (1280, 720),
+    (1024, 768),
+    (800, 600),
+    (640, 480),
+])
+
+PREFERRED_FPS: List[int] = sorted({CAMERA_FPS, 60, 30, 24}, reverse=True)
+
+CAPTURE_BACKEND = cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY
+
+config_lock = asyncio.Lock()
+camera_reset_event = asyncio.Event()
+
+CURRENT_VIDEO_INFO: Dict[str, Any] = {
+    "index": None,
+    "width": None,
+    "height": None,
+    "fps": None,
+    "codec": None,
+    "orientation": FRAME_ORIENTATION,
+}
+
+
+def _normalize_orientation(value: str) -> str:
+    allowed = {"none", "flip_h", "flip_v", "rotate180", "rotate_180", "mirror", "mirror_h"}
+    value = (value or "none").lower()
+    if value in ("mirror", "mirror_h"):
+        return "flip_h"
+    if value == "rotate_180":
+        return "rotate180"
+    return value if value in allowed else "none"
+
+
+def _config_dict() -> Dict[str, Any]:
+    """Snapshot del estado actual de configuración para exponer vía API."""
+    return {
+        "EAR_THRESHOLD": EAR_THRESHOLD,
+        "MAR_THRESHOLD": MAR_THRESHOLD,
+        "PITCH_DEG_THRESHOLD": PITCH_DEG_THRESHOLD,
+        "CONSEC_FRAMES": CONSEC_FRAMES,
+        "W_EAR": W_EAR,
+        "W_MAR": W_MAR,
+        "W_POSE": W_POSE,
+        "FUSION_THRESHOLD": FUSION_THRESHOLD,
+        "USE_PYTHON_ALARM": USE_PYTHON_ALARM,
+        "camera": {
+            "requested": {
+                "index": CAMERA_INDEX,
+                "width": CAMERA_WIDTH,
+                "height": CAMERA_HEIGHT,
+                "fps": CAMERA_FPS,
+                "codec": CAMERA_CODEC,
+                "orientation": FRAME_ORIENTATION,
+            },
+            "active": CURRENT_VIDEO_INFO.copy(),
+            "options": {
+                "codecs": PREFERRED_CODECS,
+                "resolutions": [[int(w), int(h)] for (w, h) in DEFAULT_RESOLUTIONS],
+                "fps": PREFERRED_FPS,
+            },
+        },
+    }
+
+
+def _update_preferred_video(codec: Optional[str] = None, resolution: Optional[Tuple[int, int]] = None, fps: Optional[int] = None) -> None:
+    global PREFERRED_CODECS, DEFAULT_RESOLUTIONS, PREFERRED_FPS
+
+    if codec:
+        codec = codec.upper()
+        PREFERRED_CODECS = _unique_sequence([codec] + PREFERRED_CODECS)
+    if resolution:
+        DEFAULT_RESOLUTIONS = _unique_sequence([resolution] + DEFAULT_RESOLUTIONS)
+    if fps:
+        PREFERRED_FPS = sorted(set(PREFERRED_FPS + [fps]), reverse=True)
+
+
+def apply_orientation(frame: np.ndarray, orientation: str) -> np.ndarray:
+    orient = _normalize_orientation(orientation)
+    if orient == "flip_h":
+        return cv2.flip(frame, 1)
+    if orient == "flip_v":
+        return cv2.flip(frame, 0)
+    if orient == "rotate180":
+        return cv2.rotate(frame, cv2.ROTATE_180)
+    return frame
+
+
+def _camera_index_candidates(primary: int) -> List[int]:
+    primary = max(0, int(primary))
+    order = [primary]
+    for idx in range(0, 6):
+        if idx not in order:
+            order.append(idx)
+    return order
+
+
+def _open_camera_device(index_candidates: List[int], codecs: List[str], resolutions: List[Tuple[int, int]], fps: int) -> Tuple[Optional[cv2.VideoCapture], Dict[str, Any]]:
+    """Intenta abrir una cámara siguiendo las preferencias provistas."""
+    info: Dict[str, Any] = {
+        "index": None,
+        "codec": None,
+        "width": None,
+        "height": None,
+        "fps": fps,
+    }
+
+    for idx in index_candidates:
+        cap = cv2.VideoCapture(idx, CAPTURE_BACKEND)
+        if not cap or not cap.isOpened():
+            if cap:
+                cap.release()
+            continue
+
+        print(f"🔎 Probando cámara {idx}")
+        for codec in codecs:
+            try:
+                fourcc = cv2.VideoWriter_fourcc(*codec)
+            except Exception:
+                fourcc = 0
+            if fourcc:
+                cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+
+            if fps:
+                cap.set(cv2.CAP_PROP_FPS, fps)
+
+            for (width, height) in resolutions:
+                cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+                cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+                # leer algunos frames para estabilizar
+                ok = False
+                frame = None
+                for _ in range(3):
+                    ok, frame = cap.read()
+                    if ok and frame is not None:
+                        break
+                    time.sleep(0.01)
+
+                if not ok or frame is None:
+                    continue
+
+                h, w = frame.shape[:2]
+                if w <= 0 or h <= 0:
+                    continue
+
+                info.update({
+                    "index": idx,
+                    "codec": codec,
+                    "width": w,
+                    "height": h,
+                    "fps": fps,
+                })
+                print(f"✅ Cámara {idx} configurada: {w}x{h} @{fps}fps codec {codec}")
+                return cap, info
+
+        print(f"⚠️ No se pudo configurar cámara {idx}")
+        cap.release()
+
+    print("❌ No se encontró cámara disponible")
+    return None, info
 
 # Landmarks MP FaceMesh
 LEFT_EYE_IDX  = [33, 160, 158, 133, 153, 144]
@@ -168,7 +359,7 @@ def frame_to_base64(frame):
         if w > 1280:
             scale = 1280 / w
             frame = cv2.resize(frame, (int(w*scale), int(h*scale)))
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 90, cv2.IMWRITE_JPEG_PROGRESSIVE, 1])
         return base64.b64encode(buffer).decode('utf-8')
     except Exception as e:
         print(f"Error converting frame to base64: {e}")
@@ -218,40 +409,95 @@ pipeline = DrowsinessPipeline()
 # =====================
 @app.get("/config")
 def get_config():
-    return {
-        "EAR_THRESHOLD": EAR_THRESHOLD,
-        "MAR_THRESHOLD": MAR_THRESHOLD,
-        "PITCH_DEG_THRESHOLD": PITCH_DEG_THRESHOLD,
-        "CONSEC_FRAMES": CONSEC_FRAMES,
-        "W_EAR": W_EAR, "W_MAR": W_MAR, "W_POSE": W_POSE,
-        "FUSION_THRESHOLD": FUSION_THRESHOLD,
-        "USE_PYTHON_ALARM": USE_PYTHON_ALARM
-    }
+    return _config_dict()
+
 
 @app.post("/config")
 async def set_config(cfg: dict):
     global EAR_THRESHOLD, MAR_THRESHOLD, PITCH_DEG_THRESHOLD, CONSEC_FRAMES
     global W_EAR, W_MAR, W_POSE, FUSION_THRESHOLD, USE_PYTHON_ALARM
+    global CAMERA_INDEX, CAMERA_WIDTH, CAMERA_HEIGHT, CAMERA_FPS, CAMERA_CODEC, FRAME_ORIENTATION
+
     print(f"Nueva configuración: {cfg}")
-    EAR_THRESHOLD = float(cfg.get("EAR_THRESHOLD", cfg.get("earThreshold", EAR_THRESHOLD)))
-    MAR_THRESHOLD = float(cfg.get("MAR_THRESHOLD", MAR_THRESHOLD))
-    PITCH_DEG_THRESHOLD = float(cfg.get("PITCH_DEG_THRESHOLD", PITCH_DEG_THRESHOLD))
-    CONSEC_FRAMES = int(cfg.get("CONSEC_FRAMES", cfg.get("consecFrames", CONSEC_FRAMES)))
-    W_EAR = float(cfg.get("W_EAR", W_EAR))
-    W_MAR = float(cfg.get("W_MAR", W_MAR))
-    W_POSE = float(cfg.get("W_POSE", W_POSE))
-    FUSION_THRESHOLD = float(cfg.get("FUSION_THRESHOLD", FUSION_THRESHOLD))
-    USE_PYTHON_ALARM = bool(cfg.get("USE_PYTHON_ALARM", USE_PYTHON_ALARM))
-    if USE_PYTHON_ALARM and not pygame.mixer.get_init():
-        try:
-            pygame.mixer.init()
-            pygame.mixer.music.load("alarma.mp3")
-        except Exception as exc:
-            print("No se pudo inicializar alarma tras cambio de config:", exc)
-            USE_PYTHON_ALARM = False
-    elif not USE_PYTHON_ALARM and pygame.mixer.get_init():
+
+    video_changed = False
+
+    async with config_lock:
+        if "EAR_THRESHOLD" in cfg or "earThreshold" in cfg:
+            EAR_THRESHOLD = float(cfg.get("EAR_THRESHOLD", cfg.get("earThreshold", EAR_THRESHOLD)))
+        if "MAR_THRESHOLD" in cfg:
+            MAR_THRESHOLD = float(cfg["MAR_THRESHOLD"])
+        if "PITCH_DEG_THRESHOLD" in cfg:
+            PITCH_DEG_THRESHOLD = float(cfg["PITCH_DEG_THRESHOLD"])
+        if "CONSEC_FRAMES" in cfg or "consecFrames" in cfg:
+            CONSEC_FRAMES = int(cfg.get("CONSEC_FRAMES", cfg.get("consecFrames", CONSEC_FRAMES)))
+        if "W_EAR" in cfg:
+            W_EAR = float(cfg["W_EAR"])
+        if "W_MAR" in cfg:
+            W_MAR = float(cfg["W_MAR"])
+        if "W_POSE" in cfg:
+            W_POSE = float(cfg["W_POSE"])
+        if "FUSION_THRESHOLD" in cfg:
+            FUSION_THRESHOLD = float(cfg["FUSION_THRESHOLD"])
+
+        if "USE_PYTHON_ALARM" in cfg:
+            USE_PYTHON_ALARM = bool(cfg["USE_PYTHON_ALARM"])
+
+        if "cameraIndex" in cfg:
+            idx = int(cfg["cameraIndex"])
+            if idx != CAMERA_INDEX:
+                CAMERA_INDEX = idx
+                video_changed = True
+
+        if "frameWidth" in cfg:
+            width = int(cfg["frameWidth"])
+            if width != CAMERA_WIDTH:
+                CAMERA_WIDTH = max(160, width)
+                video_changed = True
+
+        if "frameHeight" in cfg:
+            height = int(cfg["frameHeight"])
+            if height != CAMERA_HEIGHT:
+                CAMERA_HEIGHT = max(120, height)
+                video_changed = True
+
+        if "cameraFps" in cfg:
+            fps = int(cfg["cameraFps"])
+            if fps != CAMERA_FPS:
+                CAMERA_FPS = max(5, fps)
+                video_changed = True
+
+        if "cameraCodec" in cfg:
+            codec = str(cfg["cameraCodec"]).upper()[:4]
+            if codec and codec != CAMERA_CODEC:
+                CAMERA_CODEC = codec
+                video_changed = True
+
+        if "frameOrientation" in cfg:
+            orient = _normalize_orientation(str(cfg["frameOrientation"]))
+            if orient != FRAME_ORIENTATION:
+                FRAME_ORIENTATION = orient
+                video_changed = True
+
+        _update_preferred_video(CAMERA_CODEC, (CAMERA_WIDTH, CAMERA_HEIGHT), CAMERA_FPS)
+
+    if USE_PYTHON_ALARM:
+        if not pygame.mixer.get_init():
+            try:
+                pygame.mixer.init()
+                pygame.mixer.music.load("alarma.mp3")
+            except Exception as exc:
+                print("No se pudo inicializar alarma tras cambio de config:", exc)
+                USE_PYTHON_ALARM = False
+    elif pygame.mixer.get_init():
         pygame.mixer.music.stop()
-    return {"ok": True, **get_config()}
+
+    if video_changed:
+        camera_reset_event.set()
+
+    config_payload = _config_dict()
+    asyncio.create_task(broadcast({"message_type": "config", "config": config_payload}))
+    return {"ok": True, **config_payload}
 
 # =====================
 # WebSocket: métricas
@@ -305,7 +551,8 @@ async def handle_event(e: dict):
                 pygame.mixer.music.play(-1)
 
     # Difundir cualquier evento (incluye report_window, eye_blink, frame_overlay)
-    await broadcast(e)
+    payload = {"message_type": "event", **e}
+    await broadcast(payload)
 
 # =====================
 # Loop de cámara en segundo plano
@@ -314,45 +561,67 @@ async def camera_loop():
     global closed_frames, last_ear, last_mar, last_yaw, last_pitch, last_roll, is_drowsy
 
     print("Iniciando loop de cámara...")
-    cap = cv2.VideoCapture(0)
-    if not cap.isOpened():
-        print("❌ No se pudo abrir la cámara 0")
-        for i in range(1, 4):
-            print(f"Intentando cámara {i}...")
-            cap = cv2.VideoCapture(i)
-            if cap.isOpened():
-                print(f"✅ Cámara {i} abierta")
-                break
-        else:
-            print("❌ No se pudo abrir ninguna cámara")
-            return
-
-    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
-    candidates = [(1920, 1080), (1280, 720), (1024, 768), (800, 600), (640, 480)]
-    selected = None
-    for (W, H) in candidates:
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
-        ok, test_frame = cap.read()
-        if ok:
-            h, w = test_frame.shape[:2]
-            if abs(w - W) <= 16 and abs(h - H) <= 16:
-                selected = (w, h)
-                print(f"✅ Resolución seleccionada: {w}x{h}")
-                break
-    if selected is None:
-        print("⚠️ No se pudo fijar una resolución alta, usando valores por defecto")
-    cap.set(cv2.CAP_PROP_FPS, 30)
-    print("✅ Cámara configurada")
-
+    cap: Optional[cv2.VideoCapture] = None
     frame_count = 0
+    consecutive_failures = 0
+    config_snapshot: Dict[str, Any] = {}
 
     try:
         while running:
+            if cap is None or camera_reset_event.is_set():
+                if cap is not None:
+                    cap.release()
+                    cap = None
+
+                camera_reset_event.clear()
+
+                async with config_lock:
+                    snapshot = {
+                        "index": CAMERA_INDEX,
+                        "width": CAMERA_WIDTH,
+                        "height": CAMERA_HEIGHT,
+                        "fps": CAMERA_FPS,
+                        "codec": CAMERA_CODEC,
+                        "orientation": FRAME_ORIENTATION,
+                    }
+
+                indices = _camera_index_candidates(snapshot["index"])
+                codecs = _unique_sequence([snapshot["codec"]] + PREFERRED_CODECS)
+                resolutions = _unique_sequence([(snapshot["width"], snapshot["height"]) ] + DEFAULT_RESOLUTIONS)
+
+                cap_candidate, info = _open_camera_device(indices, codecs, resolutions, snapshot["fps"])
+                if cap_candidate is None:
+                    CURRENT_VIDEO_INFO.update({**info, "orientation": snapshot["orientation"]})
+                    await asyncio.sleep(1.0)
+                    continue
+
+                cap = cap_candidate
+                config_snapshot = {**snapshot, **info}
+                config_snapshot["orientation"] = snapshot["orientation"]
+                CURRENT_VIDEO_INFO.update({**info, "orientation": snapshot["orientation"]})
+
+                if info.get("codec") or info.get("width"):
+                    _update_preferred_video(
+                        info.get("codec"),
+                        (info.get("width"), info.get("height")) if info.get("width") and info.get("height") else None,
+                        info.get("fps"),
+                    )
+
+                frame_count = 0
+                consecutive_failures = 0
+
             ok, frame = cap.read()
             if not ok:
                 await asyncio.sleep(0.1)
+                consecutive_failures += 1
+                if consecutive_failures > 10:
+                    print("⚠️ Se perdió la señal de video, reintentando...")
+                    camera_reset_event.set()
                 continue
+
+            consecutive_failures = 0
+
+            frame = apply_orientation(frame, config_snapshot.get("orientation", "none"))
 
             frame_count += 1
             h, w = frame.shape[:2]
@@ -363,6 +632,7 @@ async def camera_loop():
             yaw = pitch = roll = None
             processed = frame.copy()
             reason = []
+            fused_score = None
 
             if results.multi_face_landmarks:
                 lms = results.multi_face_landmarks[0].landmark
@@ -446,6 +716,7 @@ async def camera_loop():
                 processed = frame.copy()
                 cv2.putText(processed, 'NO SE DETECTA ROSTRO',
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+                fused_score = fused_score if fused_score is not None else 0.0
 
             # Actualizar últimas métricas
             last_ear = float(ear) if ear is not None else None
@@ -460,13 +731,44 @@ async def camera_loop():
 
             # Payload de métricas/preview (se mantiene como antes)
             if frame_count % 5 == 0:
+                active_camera = {k: v for k, v in CURRENT_VIDEO_INFO.items()}
+                if active_camera.get("orientation") is None:
+                    active_camera["orientation"] = FRAME_ORIENTATION
+
+                camera_config = {
+                    "active": active_camera,
+                    "requested": {
+                        "index": CAMERA_INDEX,
+                        "width": CAMERA_WIDTH,
+                        "height": CAMERA_HEIGHT,
+                        "fps": CAMERA_FPS,
+                        "codec": CAMERA_CODEC,
+                        "orientation": FRAME_ORIENTATION,
+                    },
+                    "options": {
+                        "codecs": PREFERRED_CODECS,
+                        "resolutions": [[int(w), int(h)] for (w, h) in DEFAULT_RESOLUTIONS],
+                        "fps": PREFERRED_FPS,
+                    },
+                }
+
+                config_payload = {
+                    "usePythonAlarm": USE_PYTHON_ALARM,
+                    "camera": camera_config,
+                }
+
+                fused_value = round(fused_score, 3) if fused_score is not None else None
+
                 payload = {
+                    "message_type": "metrics",
                     "ear": round(last_ear, 4) if last_ear is not None else None,
                     "mar": round(last_mar, 4) if last_mar is not None else None,
                     "yaw": round(last_yaw, 2) if last_yaw is not None else None,
                     "pitch": round(last_pitch, 2) if last_pitch is not None else None,
                     "roll": round(last_roll, 2) if last_roll is not None else None,
                     "closedFrames": closed_frames,
+                    "threshold": EAR_THRESHOLD,
+                    "consecFrames": CONSEC_FRAMES,
                     "thresholds": {
                         "ear": EAR_THRESHOLD,
                         "mar": MAR_THRESHOLD,
@@ -475,14 +777,11 @@ async def camera_loop():
                     },
                     "weights": {"ear": W_EAR, "mar": W_MAR, "pose": W_POSE},
                     "isDrowsy": is_drowsy,
-                    "fusedScore": round(
-                        (W_EAR*clamp01((EAR_THRESHOLD - (last_ear or 0))/max(1e-6, EAR_THRESHOLD*0.6)) +
-                         W_MAR*clamp01(((last_mar or 0)-MAR_THRESHOLD)/max(1e-6, MAR_THRESHOLD*0.8)) +
-                         W_POSE*clamp01((abs(last_pitch or 0)-PITCH_DEG_THRESHOLD)/max(1e-6, PITCH_DEG_THRESHOLD))),
-                         3),
+                    "fusedScore": fused_value,
                     "reason": reason,
                     "rawFrame": raw_b64,
-                    "processedFrame": proc_b64
+                    "processedFrame": proc_b64,
+                    "config": config_payload,
                 }
                 await broadcast(payload)
 
@@ -529,14 +828,7 @@ def health():
         "status": "healthy",
         "camera_active": running,
         "clients_connected": len(clients),
-        "current_config": {
-            "EAR_THRESHOLD": EAR_THRESHOLD,
-            "MAR_THRESHOLD": MAR_THRESHOLD,
-            "PITCH_DEG_THRESHOLD": PITCH_DEG_THRESHOLD,
-            "CONSEC_FRAMES": CONSEC_FRAMES,
-            "W_EAR": W_EAR, "W_MAR": W_MAR, "W_POSE": W_POSE,
-            "FUSION_THRESHOLD": FUSION_THRESHOLD
-        }
+        "current_config": _config_dict(),
     }
 
 # Run:

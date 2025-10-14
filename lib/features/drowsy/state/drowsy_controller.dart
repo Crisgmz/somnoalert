@@ -6,6 +6,7 @@ import 'package:audioplayers/audioplayers.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:http/http.dart' as http;
+import 'package:somnoalert/models/events.dart';
 
 import '../../../core/ws_service.dart';
 import '../model.dart';
@@ -193,6 +194,9 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
   Timer? _reconnectTimer;
   int _reconnectAttempts = 0;
   static const int _maxReconnectAttempts = 5;
+  final _eventsCtrl = StreamController<DrowsyEvent>.broadcast();
+
+  Stream<DrowsyEvent> get events => _eventsCtrl.stream;
 
   @override
   Future<DrowsyMetrics?> build() async {
@@ -212,6 +216,7 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
         await _runner!.stop();
         _runner!.dispose();
       }
+      await _eventsCtrl.close();
     });
 
     return null;
@@ -245,6 +250,22 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
     try {
       _ws!.connect(
         (map) async {
+          final messageType = map['message_type'] as String?;
+          final rawType = map['type'] as String?;
+
+          if (messageType == 'config') {
+            return;
+          }
+
+          final effectiveType = messageType ?? rawType;
+          if (_isEventType(effectiveType)) {
+            final event = _parseEvent(map);
+            if (event != null && !_eventsCtrl.isClosed) {
+              _eventsCtrl.add(event);
+            }
+            return;
+          }
+
           final metrics = DrowsyMetrics.fromMap(map);
           state = AsyncValue.data(metrics);
           _reconnectAttempts = 0;
@@ -314,6 +335,12 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
     double? wPose,
     int? consecFrames,
     String? frameOrientation, // 'none' | 'rotate180' | 'flip_h' | 'flip_v'
+    bool? usePythonAlarm,
+    int? cameraIndex,
+    int? frameWidth,
+    int? frameHeight,
+    int? cameraFps,
+    String? cameraCodec,
   }) async {
     try {
       final base = ref.read(backendUrlProvider);
@@ -331,6 +358,14 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
 
       if (consecFrames != null) body['CONSEC_FRAMES'] = consecFrames;
       if (frameOrientation != null) body['frameOrientation'] = frameOrientation;
+      if (usePythonAlarm != null) body['USE_PYTHON_ALARM'] = usePythonAlarm;
+      if (cameraIndex != null) body['cameraIndex'] = cameraIndex;
+      if (frameWidth != null) body['frameWidth'] = frameWidth;
+      if (frameHeight != null) body['frameHeight'] = frameHeight;
+      if (cameraFps != null) body['cameraFps'] = cameraFps;
+      if (cameraCodec != null && cameraCodec.trim().isNotEmpty) {
+        body['cameraCodec'] = cameraCodec.trim().toUpperCase();
+      }
 
       final response = await http
           .post(
@@ -398,5 +433,66 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
       print('Health check failed: $e');
       return false;
     }
+  }
+
+  static const Set<String> _knownEventTypes = {
+    'eye_blink',
+    'micro_sleep',
+    'yawn',
+    'pitch_down',
+    'eye_rub',
+    'report_window',
+  };
+
+  bool _isEventType(String? type) =>
+      type != null && _knownEventTypes.contains(type);
+
+  DrowsyEvent? _parseEvent(Map<String, dynamic> payload) {
+    final type = payload['type'] as String?;
+    final ts = _parseTimestamp(payload['ts']);
+    switch (type) {
+      case 'eye_blink':
+        return EyeBlink(ts);
+      case 'micro_sleep':
+        return MicroSleep(ts, (payload['duration_s'] as num?)?.toDouble() ?? 0);
+      case 'yawn':
+        return YawnEvent(ts, (payload['duration_s'] as num?)?.toDouble() ?? 0);
+      case 'pitch_down':
+        return PitchDown(ts, (payload['duration_s'] as num?)?.toDouble() ?? 0);
+      case 'eye_rub':
+        return EyeRub(
+          ts,
+          (payload['hand'] as String?) ?? 'unknown',
+          (payload['duration_s'] as num?)?.toDouble() ?? 0,
+        );
+      case 'report_window':
+        return ReportWindow(
+          ts,
+          (payload['window_s'] as num?)?.toInt() ?? 0,
+          (payload['counts'] as Map<String, dynamic>?) ?? const {},
+          (payload['durations'] as Map<String, dynamic>?) ?? const {},
+        );
+      default:
+        return null;
+    }
+  }
+
+  DateTime _parseTimestamp(dynamic value) {
+    if (value is num) {
+      return DateTime.fromMillisecondsSinceEpoch(
+        (value * 1000).round(),
+        isUtc: true,
+      ).toLocal();
+    }
+    if (value is String) {
+      final parsed = double.tryParse(value);
+      if (parsed != null) {
+        return DateTime.fromMillisecondsSinceEpoch(
+          (parsed * 1000).round(),
+          isUtc: true,
+        ).toLocal();
+      }
+    }
+    return DateTime.now();
   }
 }
