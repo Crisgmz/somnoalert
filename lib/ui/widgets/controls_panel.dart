@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/config_model.dart';
+import '../../models/metrics_payload.dart';
 import '../../state/config_provider.dart';
 
 class ControlsPanel extends ConsumerStatefulWidget {
@@ -72,6 +73,7 @@ class _ControlsPanelState extends ConsumerState<ControlsPanel> {
     final state = ref.watch(configProvider);
     _editing ??= state.config?.copy();
     final cfg = _editing;
+    final cameraSnapshot = state.liveSnapshot?.camera;
 
     if (cfg == null) {
       return Container(
@@ -111,6 +113,10 @@ class _ControlsPanelState extends ConsumerState<ControlsPanel> {
             'Controles',
             style: theme.textTheme.titleMedium?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
           ),
+          if (cameraSnapshot != null) ...[
+            const SizedBox(height: 12),
+            _CameraSummary(camera: cameraSnapshot),
+          ],
           const SizedBox(height: 16),
           _SliderRow(
             label: 'EAR Threshold',
@@ -310,6 +316,105 @@ class _SliderRow extends StatelessWidget {
             onChanged: onChanged,
           ),
         ],
+      ),
+    );
+  }
+}
+
+class _CameraSummary extends StatelessWidget {
+  const _CameraSummary({required this.camera});
+
+  final CameraConfigSnapshot camera;
+
+  String _describeState(String label, CameraStateSnapshot? state) {
+    if (state == null) {
+      return '$label: --';
+    }
+
+    final parts = <String>[];
+    if (state.index != null) parts.add('#${state.index}');
+    if (state.width != null && state.height != null) {
+      parts.add('${state.width}x${state.height}');
+    }
+    if (state.fps != null) parts.add('${state.fps} fps');
+    if (state.codec != null) parts.add(state.codec!);
+    if (state.orientation != null && state.orientation != 'none') {
+      parts.add('rot ${state.orientation}');
+    }
+    final description = parts.isEmpty ? '--' : parts.join(' · ');
+    return '$label: $description';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final options = camera.options;
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFF20263C),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Estado de cámara',
+            style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _describeState('Activa', camera.active),
+            style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _describeState('Solicitada', camera.requested),
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+          ),
+          if (options.codecs.isNotEmpty || options.resolutions.isNotEmpty || options.fps.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (options.codecs.isNotEmpty)
+                  _InfoChip(text: 'Codecs: ${options.codecs.take(3).join(', ')}'),
+                if (options.resolutions.isNotEmpty)
+                  _InfoChip(
+                    text: 'Resoluciones: ${options.resolutions.take(3).map((e) => '${e[0]}x${e[1]}').join(', ')}',
+                  ),
+                if (options.fps.isNotEmpty)
+                  _InfoChip(text: 'FPS: ${options.fps.take(3).join('/')}'),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  const _InfoChip({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
       ),
     );
   }

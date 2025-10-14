@@ -1,4 +1,14 @@
 class ConfigModel {
+  static const double defaultEarThreshold = 0.18;
+  static const double defaultMarThreshold = 0.6;
+  static const double defaultPitchThreshold = 20;
+  static const double defaultFusionThreshold = 0.7;
+  static const int defaultConsecFrames = 50;
+  static const double defaultWeightEar = 0.5;
+  static const double defaultWeightMar = 0.3;
+  static const double defaultWeightPose = 0.2;
+  static const bool defaultUsePythonAlarm = false;
+
   double earThr;
   double marThr;
   double pitchThr;
@@ -20,6 +30,18 @@ class ConfigModel {
     required this.wPose,
     required this.usePythonAlarm,
   });
+
+  factory ConfigModel.defaults() => ConfigModel(
+        earThr: defaultEarThreshold,
+        marThr: defaultMarThreshold,
+        pitchThr: defaultPitchThreshold,
+        fusionThr: defaultFusionThreshold,
+        consecFrames: defaultConsecFrames,
+        wEar: defaultWeightEar,
+        wMar: defaultWeightMar,
+        wPose: defaultWeightPose,
+        usePythonAlarm: defaultUsePythonAlarm,
+      );
 
   factory ConfigModel.fromJson(Map<String, dynamic> json) {
     return ConfigModel(

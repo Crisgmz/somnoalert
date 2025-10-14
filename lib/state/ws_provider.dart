@@ -4,6 +4,8 @@ import '../core/ws/drowsy_socket.dart';
 import '../models/events.dart';
 import '../models/metrics_payload.dart';
 import 'config_provider.dart';
+import 'events_provider.dart';
+import 'metrics_provider.dart';
 
 Uri _buildWsUri(String baseUrl) {
   final base = Uri.parse(baseUrl);
@@ -36,4 +38,24 @@ final metricsStreamProvider = StreamProvider<MetricsPayload>((ref) {
 final eventsStreamProvider = StreamProvider<DrowsyEvent>((ref) {
   final socket = ref.watch(drowsySocketProvider);
   return socket.eventsStream;
+});
+
+final socketConnectionProvider = StreamProvider<bool>((ref) {
+  final socket = ref.watch(drowsySocketProvider);
+  return socket.connectionStream;
+});
+
+final dashboardSyncProvider = Provider.autoDispose<void>((ref) {
+  ref.listen<AsyncValue<MetricsPayload>>(metricsStreamProvider, (previous, next) {
+    next.whenData((payload) {
+      ref.read(metricsProvider.notifier).update(payload);
+      ref.read(configProvider.notifier).hydrateFromMetrics(payload);
+    });
+  });
+
+  ref.listen<AsyncValue<DrowsyEvent>>(eventsStreamProvider, (previous, next) {
+    next.whenData((event) {
+      ref.read(eventsProvider.notifier).addEvent(event);
+    });
+  });
 });

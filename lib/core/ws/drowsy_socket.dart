@@ -20,12 +20,31 @@ class DrowsySocket {
   Timer? _reconnectTimer;
   bool _disposed = false;
   int _retryAttempts = 0;
+  bool _connected = false;
 
   final _metricsController = StreamController<MetricsPayload>.broadcast();
   final _eventsController = StreamController<DrowsyEvent>.broadcast();
+  late final StreamController<bool> _connectionController = StreamController<bool>.broadcast(
+    onListen: () {
+      if (!_connectionController.isClosed) {
+        _connectionController.add(_connected);
+      }
+    },
+  );
 
   Stream<MetricsPayload> get metricsStream => _metricsController.stream;
   Stream<DrowsyEvent> get eventsStream => _eventsController.stream;
+  Stream<bool> get connectionStream => _connectionController.stream;
+
+  void _emitConnection(bool value) {
+    if (_disposed || _connectionController.isClosed) {
+      return;
+    }
+    _connected = value;
+    if (_connectionController.hasListener) {
+      _connectionController.add(value);
+    }
+  }
 
   void _connect() {
     if (_disposed) return;
@@ -33,6 +52,7 @@ class DrowsySocket {
     try {
       _channel = WebSocketChannel.connect(uri);
       _retryAttempts = 0;
+      _emitConnection(true);
       _listenChannel();
       _startPing();
     } catch (_) {
@@ -75,16 +95,18 @@ class DrowsySocket {
         return;
       }
 
-      if (decoded.containsKey('type')) {
+      final messageType = decoded['message_type'] as String?;
+      if (messageType == 'event' || decoded.containsKey('type')) {
         final event = _parseEvent(decoded);
         if (event != null && !_eventsController.isClosed) {
           _eventsController.add(event);
         }
-      } else {
+        return;
+      }
+
+      if (!_metricsController.isClosed) {
         final payload = MetricsPayload.fromJson(decoded);
-        if (!_metricsController.isClosed && _metricsController.hasListener) {
-          _metricsController.add(payload);
-        }
+        _metricsController.add(payload);
       }
     } catch (_) {
       // ignore malformed messages
@@ -151,6 +173,7 @@ class DrowsySocket {
     _pingTimer?.cancel();
     _channel?.sink.close();
     _channel = null;
+    _emitConnection(false);
 
     final delaySeconds = min(10, pow(2, _retryAttempts).toInt());
     _retryAttempts = min(_retryAttempts + 1, 4);
@@ -166,5 +189,6 @@ class DrowsySocket {
     _channel?.sink.close();
     _metricsController.close();
     _eventsController.close();
+    _connectionController.close();
   }
 }

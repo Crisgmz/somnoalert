@@ -2,8 +2,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/events.dart';
-import '../../models/metrics_payload.dart';
-import '../../state/config_provider.dart';
 import '../../state/events_provider.dart';
 import '../../state/metrics_provider.dart';
 import '../../state/ws_provider.dart';
@@ -25,27 +23,12 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.listen<AsyncValue<MetricsPayload>>(metricsStreamProvider, (previous, next) {
-        next.whenData((payload) {
-          ref.read(metricsProvider.notifier).update(payload);
-        });
-      });
-
-      ref.listen<AsyncValue<DrowsyEvent>>(eventsStreamProvider, (previous, next) {
-        next.whenData((event) {
-          ref.read(eventsProvider.notifier).addEvent(event);
-        });
-      });
-
       ref.listen<DrowsyEvent?>(eventsProvider.select((state) => state.toastEvent), (prev, next) {
         if (next != null) {
           _showToast(next);
           ref.read(eventsProvider.notifier).clearToast();
         }
       });
-
-      // Trigger initial config load
-      ref.read(configProvider.notifier).load();
     });
   }
 
@@ -98,6 +81,7 @@ class _DashboardScreenState extends ConsumerState<DashboardScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(dashboardSyncProvider);
     return Scaffold(
       backgroundColor: const Color(0xFF0C1021),
       body: SafeArea(
