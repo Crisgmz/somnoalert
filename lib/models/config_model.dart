@@ -11,29 +11,24 @@ class ConfigModel {
   static const double defaultWeightPose = 0.2;
   static const bool defaultUsePythonAlarm = false;
 
-  double earThr;
-  double marThr;
-  double pitchThr;
-  double fusionThr;
-  int consecFrames;
-  double wEar;
-  double wMar;
-  double wPose;
-  bool usePythonAlarm;
-
   ConfigModel({
     ThresholdsConfig? thresholds,
-    required this.wEar,
-    required this.wMar,
-    required this.wPose,
-    required this.usePythonAlarm,
-  }) : thresholds = thresholds ?? ThresholdsConfig.defaults(
-          baseEar: defaultEarThreshold,
-          baseMar: defaultMarThreshold,
-          basePitch: defaultPitchThreshold,
-          baseConsec: defaultConsecFrames,
-          baseFusion: defaultFusionThreshold,
-        );
+    double? wEar,
+    double? wMar,
+    double? wPose,
+    bool? usePythonAlarm,
+  })  : thresholds = thresholds ??
+            ThresholdsConfig.defaults(
+              baseEar: defaultEarThreshold,
+              baseMar: defaultMarThreshold,
+              basePitch: defaultPitchThreshold,
+              baseConsec: defaultConsecFrames,
+              baseFusion: defaultFusionThreshold,
+            ),
+        wEar = wEar ?? defaultWeightEar,
+        wMar = wMar ?? defaultWeightMar,
+        wPose = wPose ?? defaultWeightPose,
+        usePythonAlarm = usePythonAlarm ?? defaultUsePythonAlarm;
 
   ThresholdsConfig thresholds;
   double wEar;
@@ -77,24 +72,7 @@ class ConfigModel {
     thresholds = thresholds.copyWithTier(key, config);
   }
 
-  factory ConfigModel.defaults() => ConfigModel(
-        wEar: defaultWeightEar,
-        wMar: defaultWeightMar,
-        wPose: defaultWeightPose,
-        usePythonAlarm: defaultUsePythonAlarm,
-      );
-
-  factory ConfigModel.defaults() => ConfigModel(
-        earThr: defaultEarThreshold,
-        marThr: defaultMarThreshold,
-        pitchThr: defaultPitchThreshold,
-        fusionThr: defaultFusionThreshold,
-        consecFrames: defaultConsecFrames,
-        wEar: defaultWeightEar,
-        wMar: defaultWeightMar,
-        wPose: defaultWeightPose,
-        usePythonAlarm: defaultUsePythonAlarm,
-      );
+  factory ConfigModel.defaults() => ConfigModel();
 
   factory ConfigModel.fromJson(Map<String, dynamic> json) {
     final baseEar = (json['EAR_THRESHOLD'] as num?)?.toDouble() ?? defaultEarThreshold;
@@ -128,7 +106,7 @@ class ConfigModel {
       wEar: (json['W_EAR'] as num?)?.toDouble() ?? defaultWeightEar,
       wMar: (json['W_MAR'] as num?)?.toDouble() ?? defaultWeightMar,
       wPose: (json['W_POSE'] as num?)?.toDouble() ?? defaultWeightPose,
-      usePythonAlarm: (json['USE_PYTHON_ALARM'] as bool?) ?? false,
+      usePythonAlarm: (json['USE_PYTHON_ALARM'] as bool?) ?? defaultUsePythonAlarm,
     );
   }
 
@@ -139,10 +117,10 @@ class ConfigModel {
       'MAR_THRESHOLD': drowsy.mar,
       'PITCH_DEG_THRESHOLD': drowsy.pitch,
       'CONSEC_FRAMES': drowsy.consecFrames,
+      'FUSION_THRESHOLD': drowsy.fusion,
       'W_EAR': wEar,
       'W_MAR': wMar,
       'W_POSE': wPose,
-      'FUSION_THRESHOLD': drowsy.fusion,
       'USE_PYTHON_ALARM': usePythonAlarm,
       'thresholds': thresholds.toJson(),
       'thresholdOrder': thresholds.order,
