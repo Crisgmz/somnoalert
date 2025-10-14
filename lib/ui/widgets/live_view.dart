@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/utils/base64_image.dart';
 import '../../models/metrics_payload.dart';
 import '../../state/metrics_provider.dart';
+import '../../state/ws_provider.dart';
 
 class LiveView extends ConsumerStatefulWidget {
   const LiveView({super.key});
@@ -21,6 +22,7 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
   String? _lastProcessed;
   Uint8List? _rawBytes;
   Uint8List? _processedBytes;
+  DateTime? _lastFrameAt;
 
   @override
   bool get wantKeepAlive => true;
@@ -43,6 +45,10 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
         _lastProcessed = processed;
       }
     }
+
+    if (payload != null) {
+      _lastFrameAt = payload.receivedAt;
+    }
   }
 
   @override
@@ -51,7 +57,29 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
     final metrics = ref.watch(metricsProvider);
     _updateFrames(metrics);
 
+    final connection = ref.watch(socketConnectionProvider);
+
+    _SocketStatus socketStatus = _SocketStatus.connecting;
+    connection.when(
+      data: (value) {
+        socketStatus = value ? _SocketStatus.connected : _SocketStatus.disconnected;
+      },
+      error: (_, __) {
+        socketStatus = _SocketStatus.disconnected;
+      },
+      loading: () {
+        socketStatus = _SocketStatus.connecting;
+      },
+    );
+
     final imageBytes = _showProcessed ? _processedBytes ?? _rawBytes : _rawBytes ?? _processedBytes;
+    final hasFrame = imageBytes != null;
+    final lastFrameAt = _lastFrameAt;
+    final isStale = metrics?.isStale ??
+        (lastFrameAt == null
+            ? true
+            : DateTime.now().difference(lastFrameAt) > const Duration(seconds: 5));
+    final waitingForFrames = !hasFrame && socketStatus != _SocketStatus.disconnected;
 
     return RepaintBoundary(
       child: Container(
@@ -87,6 +115,8 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                       ],
                     ),
                   ),
+                  const SizedBox(width: 12),
+                  _ConnectionBadge(status: socketStatus),
                   Container(
                     decoration: BoxDecoration(
                       color: Colors.black26,
@@ -139,8 +169,129 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                         ),
                       ),
                     _OverlayMetrics(metrics: metrics),
+                    if (socketStatus != _SocketStatus.connected)
+                      _StatusBanner(
+                        icon: Icons.wifi_tethering_off,
+                        message: socketStatus == _SocketStatus.connecting
+                            ? 'Conectando con el backend...'
+                            : 'Conexión perdida. Reintentando...',
+                      )
+                    else if (waitingForFrames)
+                      const _StatusBanner(
+                        icon: Icons.hourglass_top,
+                        message: 'Esperando primeros frames... Asegúrate de que la cámara esté activa.',
+                      )
+                    else if (isStale)
+                      _StatusBanner(
+                        icon: Icons.schedule,
+                        message: 'Sin datos recientes · ${_humanizeDelay(_lastFrameAt)}',
+                      ),
                   ],
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _humanizeDelay(DateTime? instant) {
+  if (instant == null) return '--';
+  final diff = DateTime.now().difference(instant).inSeconds;
+  if (diff < 1) return 'instante';
+  if (diff == 1) return '1 s';
+  if (diff < 60) return '$diff s';
+  final minutes = (diff / 60).floor();
+  if (minutes == 1) return '1 min';
+  return '$minutes min';
+}
+
+enum _SocketStatus { connected, connecting, disconnected }
+
+class _ConnectionBadge extends StatelessWidget {
+  const _ConnectionBadge({required this.status});
+
+  final _SocketStatus status;
+
+  Color get _color {
+    switch (status) {
+      case _SocketStatus.connected:
+        return Colors.greenAccent;
+      case _SocketStatus.connecting:
+        return Colors.orangeAccent;
+      case _SocketStatus.disconnected:
+        return Colors.redAccent;
+    }
+  }
+
+  String get _label {
+    switch (status) {
+      case _SocketStatus.connected:
+        return 'Conectado';
+      case _SocketStatus.connecting:
+        return 'Conectando';
+      case _SocketStatus.disconnected:
+        return 'Sin conexión';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: _color.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _color.withOpacity(0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: _color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            _label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusBanner extends StatelessWidget {
+  const _StatusBanner({required this.icon, required this.message});
+
+  final IconData icon;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: Alignment.topCenter,
+      padding: const EdgeInsets.all(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white70),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Text(
+                message,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
               ),
             ),
           ],
