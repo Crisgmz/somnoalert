@@ -58,30 +58,37 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
   }
 
   void hydrateFromMetrics(MetricsPayload payload) {
+    final thresholds = payload.thresholds;
     final weights = payload.weights;
 
     ConfigModel updated = (state.config ?? ConfigModel.defaults()).copy();
     bool changed = state.config == null;
 
-    bool _diff(double a, double b) => (a - b).abs() > 1e-4;
+    double? _asDouble(dynamic value) => (value as num?)?.toDouble();
 
-    final remoteThresholds = payload.thresholds;
-    for (final tierKey in remoteThresholds.order) {
-      final remoteTier = remoteThresholds.tier(tierKey);
-      final localTier = updated.thresholds.tier(tierKey);
-      final differs =
-          _diff(remoteTier.ear, localTier.ear) ||
-          _diff(remoteTier.mar, localTier.mar) ||
-          _diff(remoteTier.pitch, localTier.pitch) ||
-          _diff(remoteTier.fusion, localTier.fusion) ||
-          remoteTier.consecFrames != localTier.consecFrames;
-      if (differs) {
-        updated.updateTier(tierKey, remoteTier);
-        changed = true;
-      }
+    final ear = _asDouble(thresholds['ear']);
+    if (ear != null && ear != updated.earThr) {
+      updated.earThr = ear;
+      changed = true;
     }
 
-    double? _asDouble(dynamic value) => (value as num?)?.toDouble();
+    final mar = _asDouble(thresholds['mar']);
+    if (mar != null && mar != updated.marThr) {
+      updated.marThr = mar;
+      changed = true;
+    }
+
+    final pitch = _asDouble(thresholds['pitch']);
+    if (pitch != null && pitch != updated.pitchThr) {
+      updated.pitchThr = pitch;
+      changed = true;
+    }
+
+    final fusion = _asDouble(thresholds['fusion']);
+    if (fusion != null && fusion != updated.fusionThr) {
+      updated.fusionThr = fusion;
+      changed = true;
+    }
 
     if (payload.consecFrames > 0 && payload.consecFrames != updated.consecFrames) {
       updated.consecFrames = payload.consecFrames;
@@ -89,19 +96,19 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
     }
 
     final wEar = _asDouble(weights['ear']);
-    if (wEar != null && _diff(wEar, updated.wEar)) {
+    if (wEar != null && wEar != updated.wEar) {
       updated.wEar = wEar;
       changed = true;
     }
 
     final wMar = _asDouble(weights['mar']);
-    if (wMar != null && _diff(wMar, updated.wMar)) {
+    if (wMar != null && wMar != updated.wMar) {
       updated.wMar = wMar;
       changed = true;
     }
 
     final wPose = _asDouble(weights['pose']);
-    if (wPose != null && _diff(wPose, updated.wPose)) {
+    if (wPose != null && wPose != updated.wPose) {
       updated.wPose = wPose;
       changed = true;
     }

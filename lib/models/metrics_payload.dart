@@ -122,9 +122,6 @@ class MetricsConfigSnapshot {
   }
 }
 
-import 'config_model.dart';
-import 'thresholds.dart';
-
 class MetricsPayload {
   MetricsPayload({
     this.ear,
@@ -146,8 +143,7 @@ class MetricsPayload {
     this.weights = const {},
     this.configSnapshot,
     DateTime? receivedAt,
-  })  : thresholds = thresholds ?? ThresholdsConfig.defaults(),
-        receivedAt = receivedAt ?? DateTime.now();
+  }) : receivedAt = receivedAt ?? DateTime.now();
 
   final double? ear;
   final double? mar;
@@ -158,58 +154,16 @@ class MetricsPayload {
   final int closedFrames;
   final int consecFrames;
   final bool isDrowsy;
-  final String? drowsinessLevel;
-  final ThresholdsConfig thresholds;
+  final Map<String, dynamic> thresholds;
   final Map<String, dynamic> weights;
   final String? rawFrameB64;
   final String? processedFrameB64;
-  final String? landmarksFrameB64;
   final List<String> reason;
-  final List<String> stageReasons;
   final MetricsConfigSnapshot? configSnapshot;
   final DateTime receivedAt;
 
   factory MetricsPayload.fromJson(Map<String, dynamic> json) {
     final config = json['config'];
-    final thresholdsPayload = json['thresholds'];
-
-    ThresholdsConfig thresholds;
-    double _valueFor(String key, double fallbackValue) {
-      if (thresholdsPayload is Map<String, dynamic>) {
-        final direct = thresholdsPayload[key];
-        if (direct is num) return direct.toDouble();
-        final drowsy = thresholdsPayload['drowsy'];
-        if (drowsy is Map<String, dynamic>) {
-          final nested = drowsy[key];
-          if (nested is num) return nested.toDouble();
-        }
-      }
-      return fallbackValue;
-    }
-
-    final fallback = ThresholdsConfig.defaults(
-      baseEar: (json['threshold'] as num?)?.toDouble() ?? _valueFor('ear', ConfigModel.defaultEarThreshold),
-      baseMar: _valueFor('mar', ConfigModel.defaultMarThreshold),
-      basePitch: _valueFor('pitch', ConfigModel.defaultPitchThreshold),
-      baseConsec: (json['consecFrames'] as num?)?.toInt() ??
-          (_valueFor('consecFrames', ConfigModel.defaultConsecFrames.toDouble())).toInt(),
-      baseFusion: _valueFor('fusion', ConfigModel.defaultFusionThreshold),
-    );
-
-    if (thresholdsPayload is Map<String, dynamic> &&
-        thresholdsPayload.values.any((value) => value is Map<String, dynamic>)) {
-      final merged = Map<String, dynamic>.from(thresholdsPayload);
-      if (json['thresholdOrder'] is List && merged['thresholdOrder'] == null) {
-        merged['thresholdOrder'] = json['thresholdOrder'];
-      }
-      thresholds = ThresholdsConfig.fromJson(merged, fallback: fallback);
-    } else if (thresholdsPayload is Map<String, dynamic>) {
-      final drowsy = ThresholdTierConfig.fromJson(thresholdsPayload.cast<String, dynamic>(),
-          fallback: fallback.tier('drowsy'));
-      thresholds = fallback.copyWithTier('drowsy', drowsy);
-    } else {
-      thresholds = fallback;
-    }
 
     return MetricsPayload(
       ear: (json['ear'] as num?)?.toDouble(),
@@ -228,7 +182,6 @@ class MetricsPayload {
       processedFrameB64: json['processedFrame'] as String?,
       landmarksFrameB64: json['landmarksFrame'] as String?,
       reason: (json['reason'] as List?)?.cast<String>() ?? const [],
-      stageReasons: (json['stageReasons'] as List?)?.map((e) => '$e').toList() ?? const [],
       configSnapshot: config is Map<String, dynamic> ? MetricsConfigSnapshot.fromJson(config) : null,
     );
   }

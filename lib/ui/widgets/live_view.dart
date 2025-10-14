@@ -23,7 +23,6 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
   String? _lastLandmarks;
   Uint8List? _rawBytes;
   Uint8List? _processedBytes;
-  Uint8List? _landmarkBytes;
   DateTime? _lastFrameAt;
 
   @override
@@ -59,15 +58,6 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
       }
     }
 
-    final landmarks = payload?.landmarksFrameB64;
-    if (landmarks != null && landmarks != _lastLandmarks) {
-      final decoded = decodeBase64Image(landmarks);
-      if (decoded != null) {
-        _landmarkBytes = decoded;
-        _lastLandmarks = landmarks;
-      }
-    }
-
     if (payload != null) {
       _lastFrameAt = payload.receivedAt;
     }
@@ -94,18 +84,7 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
       },
     );
 
-    Uint8List? imageBytes;
-    switch (_mode) {
-      case _ViewMode.processed:
-        imageBytes = _processedBytes ?? _rawBytes ?? _landmarkBytes;
-        break;
-      case _ViewMode.raw:
-        imageBytes = _rawBytes ?? _processedBytes ?? _landmarkBytes;
-        break;
-      case _ViewMode.landmarks:
-        imageBytes = _landmarkBytes ?? _processedBytes ?? _rawBytes;
-        break;
-    }
+    final imageBytes = _showProcessed ? _processedBytes ?? _rawBytes : _rawBytes ?? _processedBytes;
     final hasFrame = imageBytes != null;
     final lastFrameAt = _lastFrameAt;
     final isStale = metrics?.isStale ??
@@ -246,8 +225,6 @@ String _humanizeDelay(DateTime? instant) {
 }
 
 enum _SocketStatus { connected, connecting, disconnected }
-
-enum _ViewMode { processed, raw, landmarks }
 
 class _ConnectionBadge extends StatelessWidget {
   const _ConnectionBadge({required this.status});

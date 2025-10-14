@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/config_model.dart';
 import '../../models/metrics_payload.dart';
-import '../../models/thresholds.dart';
 import '../../state/config_provider.dart';
 
 class ControlsPanel extends ConsumerStatefulWidget {
@@ -410,67 +409,6 @@ class _InfoChip extends StatelessWidget {
         text,
         style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
       ),
-    );
-  }
-}
-
-class _TierEditor extends StatelessWidget {
-  const _TierEditor({required this.tierKey, required this.tier, required this.onChanged});
-
-  final String tierKey;
-  final ThresholdTierConfig tier;
-  final ValueChanged<ThresholdTierConfig> onChanged;
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = Theme.of(context);
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Text(
-          'Ajustes para ${tierKey == 'drowsy' ? 'somnolencia' : tierKey == 'signs' ? 'signos' : 'normal'}',
-          style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70, fontWeight: FontWeight.w600),
-        ),
-        const SizedBox(height: 8),
-        _SliderRow(
-          label: 'EAR',
-          value: tier.ear,
-          min: 0.05,
-          max: 0.45,
-          onChanged: (value) => onChanged(tier.copyWith(ear: value)),
-        ),
-        _SliderRow(
-          label: 'MAR',
-          value: tier.mar,
-          min: 0.2,
-          max: 1.2,
-          onChanged: (value) => onChanged(tier.copyWith(mar: value)),
-        ),
-        _SliderRow(
-          label: 'Pitch',
-          value: tier.pitch,
-          min: 5,
-          max: 60,
-          onChanged: (value) => onChanged(tier.copyWith(pitch: value)),
-          suffix: '°',
-        ),
-        _SliderRow(
-          label: 'Fusión',
-          value: tier.fusion,
-          min: 0.1,
-          max: 1.0,
-          onChanged: (value) => onChanged(tier.copyWith(fusion: value)),
-        ),
-        _SliderRow(
-          label: 'Frames consecutivos',
-          value: tier.consecFrames.toDouble(),
-          min: 5,
-          max: 150,
-          divisions: 29,
-          onChanged: (value) => onChanged(tier.copyWith(consecFrames: value.round())),
-          decimals: 0,
-        ),
-      ],
     );
   }
 }

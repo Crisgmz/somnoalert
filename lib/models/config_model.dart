@@ -11,6 +11,16 @@ class ConfigModel {
   static const double defaultWeightPose = 0.2;
   static const bool defaultUsePythonAlarm = false;
 
+  double earThr;
+  double marThr;
+  double pitchThr;
+  double fusionThr;
+  int consecFrames;
+  double wEar;
+  double wMar;
+  double wPose;
+  bool usePythonAlarm;
+
   ConfigModel({
     ThresholdsConfig? thresholds,
     required this.wEar,
@@ -68,6 +78,18 @@ class ConfigModel {
   }
 
   factory ConfigModel.defaults() => ConfigModel(
+        wEar: defaultWeightEar,
+        wMar: defaultWeightMar,
+        wPose: defaultWeightPose,
+        usePythonAlarm: defaultUsePythonAlarm,
+      );
+
+  factory ConfigModel.defaults() => ConfigModel(
+        earThr: defaultEarThreshold,
+        marThr: defaultMarThreshold,
+        pitchThr: defaultPitchThreshold,
+        fusionThr: defaultFusionThreshold,
+        consecFrames: defaultConsecFrames,
         wEar: defaultWeightEar,
         wMar: defaultWeightMar,
         wPose: defaultWeightPose,
