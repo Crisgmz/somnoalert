@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'features/drowsy/view/drowsy_page.dart';
+import 'ui/screens/dashboard_screen.dart';
 
 void main() {
   runApp(const ProviderScope(child: DrowsyApp()));
@@ -17,7 +17,8 @@ class DrowsyApp extends StatelessWidget {
         colorSchemeSeed: const Color(0xFF404C8C),
         useMaterial3: true,
       ),
-      home: const DrowsyPage(),
+      debugShowCheckedModeBanner: false,
+      home: const DashboardScreen(),
     );
   }
 }
