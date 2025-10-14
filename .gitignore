@@ -1,44 +1,16 @@
-# === Python backend ===
+﻿ni .gitignore -Force
+'*.zip
 .venv/
-venv/
-**/__pycache__/
-*.py[cod]
-*.pyo
-*.pyd
-*.so
-*.egg-info/
-.pytest_cache/
-.mypy_cache/
-.env
-.env.*
-.cache/
+__pycache__/
+build/
 dist/
-build/
-
-# Subcarpeta backend
-drowsy-backend/.venv/
-
-# === Logs / OS ===
-*.log
-.DS_Store
-Thumbs.db
-
-# === Flutter/Dart ===
-.dart_tool/
-.packages
-.flutter-plugins
-.flutter-plugins-dependencies
-.melos_tool/
-
-# Builds
-build/
-ios/Pods/
-ios/.symlinks/
-ios/Flutter/Flutter.podspec
-android/.gradle/
-android/local.properties
-android/app/release/
-
-# IDE
-.idea/
+*.mp4
+*.mov
+*.bin
+*.pt
+*.onnx
+*.png
+*.jpg
+*.jpeg
 .vscode/
+.idea/' | Out-File .gitignore -Encoding utf8
