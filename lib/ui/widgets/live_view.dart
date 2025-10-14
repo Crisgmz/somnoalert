@@ -17,15 +17,27 @@ class LiveView extends ConsumerStatefulWidget {
 }
 
 class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClientMixin {
-  bool _showProcessed = true;
+  _ViewMode _mode = _ViewMode.processed;
   String? _lastRaw;
   String? _lastProcessed;
+  String? _lastLandmarks;
   Uint8List? _rawBytes;
   Uint8List? _processedBytes;
   DateTime? _lastFrameAt;
 
   @override
   bool get wantKeepAlive => true;
+
+  String _modeDescription(_ViewMode mode) {
+    switch (mode) {
+      case _ViewMode.processed:
+        return 'Procesado con overlay';
+      case _ViewMode.raw:
+        return 'Frame sin procesar';
+      case _ViewMode.landmarks:
+        return 'Nube de puntos faciales';
+    }
+  }
 
   void _updateFrames(MetricsPayload? payload) {
     final raw = payload?.rawFrameB64;
@@ -109,7 +121,7 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                               ),
                         ),
                         Text(
-                          _showProcessed ? 'Procesado con overlay' : 'Frame sin procesar',
+                          _modeDescription(_mode),
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
                         ),
                       ],
@@ -123,7 +135,7 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                       borderRadius: BorderRadius.circular(30),
                     ),
                     child: ToggleButtons(
-                      isSelected: [_showProcessed, !_showProcessed],
+                      isSelected: _ViewMode.values.map((m) => m == _mode).toList(),
                       borderRadius: BorderRadius.circular(30),
                       fillColor: Colors.blueAccent,
                       selectedColor: Colors.white,
@@ -131,7 +143,7 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                       constraints: const BoxConstraints(minHeight: 36, minWidth: 80),
                       onPressed: (index) {
                         setState(() {
-                          _showProcessed = index == 0;
+                          _mode = _ViewMode.values[index];
                         });
                       },
                       children: const [
@@ -142,6 +154,10 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                         Padding(
                           padding: EdgeInsets.symmetric(horizontal: 8),
                           child: Text('Raw'),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8),
+                          child: Text('Puntos'),
                         ),
                       ],
                     ),
@@ -306,12 +322,36 @@ class _OverlayMetrics extends StatelessWidget {
 
   final MetricsPayload? metrics;
 
+  String get _stage => metrics?.drowsinessLevel ?? (metrics?.isDrowsy == true ? 'drowsy' : 'normal');
+
   Color _statusColor(BuildContext context) {
-    if (metrics?.isDrowsy == true) return Colors.redAccent;
-    if ((metrics?.fusedScore ?? 0) > ((metrics?.thresholds['fusion'] as num?)?.toDouble() ?? 0.7)) {
-      return Colors.orangeAccent;
+    switch (_stage) {
+      case 'drowsy':
+        return Colors.redAccent;
+      case 'signs':
+        return Colors.orangeAccent;
+      default:
+        return Colors.greenAccent;
     }
-    return Colors.greenAccent;
+  }
+
+  String get _statusLabel {
+    switch (_stage) {
+      case 'drowsy':
+        return 'Somnolencia';
+      case 'signs':
+        return 'Signos de alerta';
+      default:
+        return 'Atento';
+    }
+  }
+
+  List<String> get _reasons {
+    final stageReasons = metrics?.stageReasons ?? const [];
+    if (stageReasons.isNotEmpty) {
+      return stageReasons;
+    }
+    return metrics?.reason ?? const [];
   }
 
   @override
@@ -321,7 +361,7 @@ class _OverlayMetrics extends StatelessWidget {
     }
 
     final textTheme = Theme.of(context).textTheme;
-    final reason = metrics!.reason;
+    final reason = _reasons;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -339,7 +379,7 @@ class _OverlayMetrics extends StatelessWidget {
                   border: Border.all(color: _statusColor(context)),
                 ),
                 child: Text(
-                  metrics!.isDrowsy ? 'ALERTA' : 'Atento',
+                  _statusLabel,
                   style: textTheme.labelLarge?.copyWith(
                     color: _statusColor(context),
                     fontWeight: FontWeight.bold,

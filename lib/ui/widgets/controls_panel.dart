@@ -43,6 +43,17 @@ class _ControlsPanelState extends ConsumerState<ControlsPanel> {
     return cfg.wEar + cfg.wMar + cfg.wPose;
   }
 
+  String _tierLabel(String tier) {
+    switch (tier) {
+      case 'signs':
+        return 'Signos de somnolencia';
+      case 'drowsy':
+        return 'Somnolencia';
+      default:
+        return 'Normal';
+    }
+  }
+
   Future<void> _save() async {
     final cfg = _editing;
     if (cfg == null) return;
@@ -118,63 +129,45 @@ class _ControlsPanelState extends ConsumerState<ControlsPanel> {
             _CameraSummary(camera: cameraSnapshot),
           ],
           const SizedBox(height: 16),
-          _SliderRow(
-            label: 'EAR Threshold',
-            value: cfg.earThr,
-            min: 0.05,
-            max: 0.4,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.earThr = value;
-              _editing = updated;
-            }),
-          ),
-          _SliderRow(
-            label: 'MAR Threshold',
-            value: cfg.marThr,
-            min: 0.2,
-            max: 1.0,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.marThr = value;
-              _editing = updated;
-            }),
-          ),
-          _SliderRow(
-            label: 'Pitch Threshold',
-            value: cfg.pitchThr,
-            min: 5,
-            max: 40,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.pitchThr = value;
-              _editing = updated;
-            }),
-            suffix: '°',
-          ),
-          _SliderRow(
-            label: 'Fusión Threshold',
-            value: cfg.fusionThr,
-            min: 0.1,
-            max: 1,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.fusionThr = value;
-              _editing = updated;
-            }),
-          ),
-          _SliderRow(
-            label: 'Frames consecutivos',
-            value: cfg.consecFrames.toDouble(),
-            min: 10,
-            max: 120,
-            divisions: 22,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.consecFrames = value.round();
-              _editing = updated;
-            }),
-            decimals: 0,
+          DefaultTabController(
+            length: cfg.thresholds.order.length,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TabBar(
+                  isScrollable: true,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: Colors.white60,
+                  indicatorColor: Colors.blueAccent,
+                  tabs: [
+                    for (final tier in cfg.thresholds.order)
+                      Tab(text: _tierLabel(tier)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 260,
+                  child: TabBarView(
+                    children: [
+                      for (final tier in cfg.thresholds.order)
+                        SingleChildScrollView(
+                          child: _TierEditor(
+                            tierKey: tier,
+                            tier: cfg.thresholds.tier(tier),
+                            onChanged: (updatedTier) {
+                              setState(() {
+                                final updatedConfig = cfg.copy();
+                                updatedConfig.updateTier(tier, updatedTier);
+                                _editing = updatedConfig;
+                              });
+                            },
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           const Divider(color: Colors.white12, height: 32),
           Text('Pesos de fusión', style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70)),
