@@ -18,18 +18,189 @@ from detection.pipeline import DrowsinessPipeline
 # =====================
 # Config inicial (umbrales y pesos)
 # =====================
-EAR_THRESHOLD = float(os.getenv("EAR_THRESHOLD", "0.18"))
-MAR_THRESHOLD = float(os.getenv("MAR_THRESHOLD", "0.60"))          # Bostezo
-PITCH_DEG_THRESHOLD = float(os.getenv("PITCH_DEG_THRESHOLD", "20")) # Cabeceo (grados)
-CONSEC_FRAMES = int(os.getenv("CONSEC_FRAMES", "50"))
+EAR_THRESHOLD_BASE = float(os.getenv("EAR_THRESHOLD", "0.18"))
+MAR_THRESHOLD_BASE = float(os.getenv("MAR_THRESHOLD", "0.60"))          # Bostezo
+PITCH_DEG_THRESHOLD_BASE = float(os.getenv("PITCH_DEG_THRESHOLD", "20")) # Cabeceo (grados)
+CONSEC_FRAMES_BASE = int(os.getenv("CONSEC_FRAMES", "50"))
+FUSION_THRESHOLD_BASE = float(os.getenv("FUSION_THRESHOLD", "0.7"))
+
+EAR_THRESHOLD_SIGNS = float(os.getenv("EAR_SIGNS_THRESHOLD", str(EAR_THRESHOLD_BASE + 0.03)))
+EAR_THRESHOLD_NORMAL = float(os.getenv("EAR_NORMAL_THRESHOLD", str(EAR_THRESHOLD_SIGNS + 0.03)))
+
+MAR_THRESHOLD_SIGNS = float(os.getenv("MAR_SIGNS_THRESHOLD", str(max(0.2, MAR_THRESHOLD_BASE - 0.05))))
+MAR_THRESHOLD_NORMAL = float(os.getenv("MAR_NORMAL_THRESHOLD", str(max(0.2, MAR_THRESHOLD_SIGNS - 0.05))))
+
+PITCH_THRESHOLD_SIGNS = float(os.getenv("PITCH_SIGNS_THRESHOLD", str(max(5.0, PITCH_DEG_THRESHOLD_BASE - 5.0))))
+PITCH_THRESHOLD_NORMAL = float(os.getenv("PITCH_NORMAL_THRESHOLD", str(max(5.0, PITCH_THRESHOLD_SIGNS - 5.0))))
+
+CONSEC_FRAMES_SIGNS = int(os.getenv("CONSEC_FRAMES_SIGNS", str(max(5, CONSEC_FRAMES_BASE - 10))))
+CONSEC_FRAMES_NORMAL = int(os.getenv("CONSEC_FRAMES_NORMAL", str(max(2, CONSEC_FRAMES_SIGNS - 10))))
+
+FUSION_THRESHOLD_SIGNS = float(os.getenv("FUSION_SIGNS_THRESHOLD", str(max(0.1, FUSION_THRESHOLD_BASE - 0.1))))
+FUSION_THRESHOLD_NORMAL = float(os.getenv("FUSION_NORMAL_THRESHOLD", str(max(0.05, FUSION_THRESHOLD_SIGNS - 0.1))))
+
+THRESHOLD_TIERS = ("normal", "signs", "drowsy")
+
+THRESHOLD_PRESETS: Dict[str, Dict[str, Any]] = {
+    "normal": {
+        "ear": EAR_THRESHOLD_NORMAL,
+        "mar": MAR_THRESHOLD_NORMAL,
+        "pitch": PITCH_THRESHOLD_NORMAL,
+        "fusion": FUSION_THRESHOLD_NORMAL,
+        "consecFrames": CONSEC_FRAMES_NORMAL,
+    },
+    "signs": {
+        "ear": EAR_THRESHOLD_SIGNS,
+        "mar": MAR_THRESHOLD_SIGNS,
+        "pitch": PITCH_THRESHOLD_SIGNS,
+        "fusion": FUSION_THRESHOLD_SIGNS,
+        "consecFrames": CONSEC_FRAMES_SIGNS,
+    },
+    "drowsy": {
+        "ear": EAR_THRESHOLD_BASE,
+        "mar": MAR_THRESHOLD_BASE,
+        "pitch": PITCH_DEG_THRESHOLD_BASE,
+        "fusion": FUSION_THRESHOLD_BASE,
+        "consecFrames": CONSEC_FRAMES_BASE,
+    },
+}
+
+EAR_THRESHOLD = THRESHOLD_PRESETS["drowsy"]["ear"]
+MAR_THRESHOLD = THRESHOLD_PRESETS["drowsy"]["mar"]
+PITCH_DEG_THRESHOLD = THRESHOLD_PRESETS["drowsy"]["pitch"]
+CONSEC_FRAMES = THRESHOLD_PRESETS["drowsy"]["consecFrames"]
+FUSION_THRESHOLD = THRESHOLD_PRESETS["drowsy"]["fusion"]
+
+
+def _clamp(value: float, min_v: float, max_v: float) -> float:
+    return max(min_v, min(max_v, value))
+
+
+def _copy_thresholds() -> Dict[str, Dict[str, Any]]:
+    return {
+        tier: {
+            "ear": float(cfg.get("ear", EAR_THRESHOLD_BASE)),
+            "mar": float(cfg.get("mar", MAR_THRESHOLD_BASE)),
+            "pitch": float(cfg.get("pitch", PITCH_DEG_THRESHOLD_BASE)),
+            "fusion": float(cfg.get("fusion", FUSION_THRESHOLD_BASE)),
+            "consecFrames": int(cfg.get("consecFrames", CONSEC_FRAMES_BASE)),
+        }
+        for tier, cfg in THRESHOLD_PRESETS.items()
+    }
+
+
+def _refresh_threshold_aliases() -> None:
+    global EAR_THRESHOLD, MAR_THRESHOLD, PITCH_DEG_THRESHOLD, CONSEC_FRAMES, FUSION_THRESHOLD
+    drowsy = THRESHOLD_PRESETS.get("drowsy", {})
+    EAR_THRESHOLD = float(drowsy.get("ear", EAR_THRESHOLD_BASE))
+    MAR_THRESHOLD = float(drowsy.get("mar", MAR_THRESHOLD_BASE))
+    PITCH_DEG_THRESHOLD = float(drowsy.get("pitch", PITCH_DEG_THRESHOLD_BASE))
+    FUSION_THRESHOLD = float(drowsy.get("fusion", FUSION_THRESHOLD_BASE))
+    CONSEC_FRAMES = int(drowsy.get("consecFrames", CONSEC_FRAMES_BASE))
+
+
+def _update_threshold_tier(tier: str, payload: Dict[str, Any]) -> None:
+    if tier not in THRESHOLD_PRESETS:
+        return
+
+    cfg = dict(THRESHOLD_PRESETS[tier])
+
+    if "ear" in payload:
+        try:
+            cfg["ear"] = _clamp(float(payload["ear"]), 0.05, 0.6)
+        except (TypeError, ValueError):
+            pass
+    if "mar" in payload:
+        try:
+            cfg["mar"] = _clamp(float(payload["mar"]), 0.2, 1.5)
+        except (TypeError, ValueError):
+            pass
+    if "pitch" in payload:
+        try:
+            cfg["pitch"] = _clamp(float(payload["pitch"]), 1.0, 90.0)
+        except (TypeError, ValueError):
+            pass
+    if "fusion" in payload:
+        try:
+            cfg["fusion"] = _clamp(float(payload["fusion"]), 0.05, 1.0)
+        except (TypeError, ValueError):
+            pass
+    if "consecFrames" in payload:
+        try:
+            cfg["consecFrames"] = max(1, int(payload["consecFrames"]))
+        except (TypeError, ValueError):
+            pass
+
+    THRESHOLD_PRESETS[tier] = cfg
+    if tier == "drowsy":
+        _refresh_threshold_aliases()
+
+
+def _sync_drowsy_map() -> None:
+    THRESHOLD_PRESETS["drowsy"] = {
+        "ear": EAR_THRESHOLD,
+        "mar": MAR_THRESHOLD,
+        "pitch": PITCH_DEG_THRESHOLD,
+        "fusion": FUSION_THRESHOLD,
+        "consecFrames": CONSEC_FRAMES,
+    }
+
+
+STAGE_LABELS = {
+    "normal": "Normal",
+    "signs": "Signos de somnolencia",
+    "drowsy": "Somnolencia",
+}
+
+
+def evaluate_drowsiness_stage(
+    ear: Optional[float],
+    mar: Optional[float],
+    pitch: Optional[float],
+    fused_score: Optional[float],
+    closed_frames_count: int,
+) -> Tuple[str, List[str]]:
+    stage = "normal"
+    stage_reasons: List[str] = []
+
+    for tier in THRESHOLD_TIERS:
+        if tier == "normal":
+            continue
+
+        cfg = THRESHOLD_PRESETS.get(tier, {})
+        tier_label = STAGE_LABELS.get(tier, tier)
+        tier_reasons: List[str] = []
+
+        ear_thr = cfg.get("ear")
+        if ear is not None and ear_thr is not None and ear <= ear_thr:
+            tier_reasons.append(f"{tier_label}: EAR ≤ {ear_thr:.2f}")
+
+        mar_thr = cfg.get("mar")
+        if mar is not None and mar_thr is not None and mar >= mar_thr:
+            tier_reasons.append(f"{tier_label}: MAR ≥ {mar_thr:.2f}")
+
+        pitch_thr = cfg.get("pitch")
+        if pitch is not None and pitch_thr is not None and abs(pitch) >= pitch_thr:
+            tier_reasons.append(f"{tier_label}: |Pitch| ≥ {pitch_thr:.1f}°")
+
+        fusion_thr = cfg.get("fusion")
+        if fused_score is not None and fusion_thr is not None and fused_score >= fusion_thr:
+            tier_reasons.append(f"{tier_label}: Fusión ≥ {fusion_thr:.2f}")
+
+        consec_thr = cfg.get("consecFrames")
+        if consec_thr is not None and closed_frames_count >= consec_thr:
+            tier_reasons.append(f"{tier_label}: Cerrados ≥ {consec_thr}")
+
+        if tier_reasons:
+            stage = tier
+            stage_reasons = tier_reasons
+
+    return stage, stage_reasons
 
 # Pesos para la fusión (0..1, suman 1 idealmente)
 W_EAR = float(os.getenv("W_EAR", "0.5"))
 W_MAR = float(os.getenv("W_MAR", "0.3"))
 W_POSE = float(os.getenv("W_POSE", "0.2"))
-
-# Umbral de activación de fusión (0..1)
-FUSION_THRESHOLD = float(os.getenv("FUSION_THRESHOLD", "0.7"))
 
 USE_PYTHON_ALARM = os.getenv("USE_PYTHON_ALARM", "1") == "1"
 
@@ -107,6 +278,8 @@ def _config_dict() -> Dict[str, Any]:
         "W_POSE": W_POSE,
         "FUSION_THRESHOLD": FUSION_THRESHOLD,
         "USE_PYTHON_ALARM": USE_PYTHON_ALARM,
+        "thresholds": _copy_thresholds(),
+        "thresholdOrder": list(THRESHOLD_TIERS),
         "camera": {
             "requested": {
                 "index": CAMERA_INDEX,
@@ -381,6 +554,22 @@ def draw_landmarks_on_frame(frame, landmarks):
         print(f"Error drawing landmarks: {e}")
         return frame
 
+
+def render_landmark_cloud(landmarks, width: int, height: int) -> np.ndarray:
+    try:
+        canvas = np.zeros((height, width, 3), dtype=np.uint8)
+        canvas[:] = (16, 24, 40)
+        color = (210, 255, 255)
+        for lm in landmarks:
+            x = int(lm.x * width)
+            y = int(lm.y * height)
+            if 0 <= x < width and 0 <= y < height:
+                cv2.circle(canvas, (x, y), 2, color, -1, lineType=cv2.LINE_AA)
+        return canvas
+    except Exception as e:
+        print(f"Error rendering landmark cloud: {e}")
+        return np.zeros((height, width, 3), dtype=np.uint8)
+
 # =====================
 # FastAPI
 # =====================
@@ -423,14 +612,26 @@ async def set_config(cfg: dict):
     video_changed = False
 
     async with config_lock:
+        thresholds_payload = cfg.get("thresholds")
+        if isinstance(thresholds_payload, dict):
+            for tier, values in thresholds_payload.items():
+                if isinstance(values, dict):
+                    _update_threshold_tier(tier, values)
+            _refresh_threshold_aliases()
+
+        aliases_changed = False
         if "EAR_THRESHOLD" in cfg or "earThreshold" in cfg:
             EAR_THRESHOLD = float(cfg.get("EAR_THRESHOLD", cfg.get("earThreshold", EAR_THRESHOLD)))
+            aliases_changed = True
         if "MAR_THRESHOLD" in cfg:
             MAR_THRESHOLD = float(cfg["MAR_THRESHOLD"])
+            aliases_changed = True
         if "PITCH_DEG_THRESHOLD" in cfg:
             PITCH_DEG_THRESHOLD = float(cfg["PITCH_DEG_THRESHOLD"])
+            aliases_changed = True
         if "CONSEC_FRAMES" in cfg or "consecFrames" in cfg:
             CONSEC_FRAMES = int(cfg.get("CONSEC_FRAMES", cfg.get("consecFrames", CONSEC_FRAMES)))
+            aliases_changed = True
         if "W_EAR" in cfg:
             W_EAR = float(cfg["W_EAR"])
         if "W_MAR" in cfg:
@@ -439,6 +640,10 @@ async def set_config(cfg: dict):
             W_POSE = float(cfg["W_POSE"])
         if "FUSION_THRESHOLD" in cfg:
             FUSION_THRESHOLD = float(cfg["FUSION_THRESHOLD"])
+            aliases_changed = True
+
+        if aliases_changed:
+            _sync_drowsy_map()
 
         if "USE_PYTHON_ALARM" in cfg:
             USE_PYTHON_ALARM = bool(cfg["USE_PYTHON_ALARM"])
@@ -631,8 +836,11 @@ async def camera_loop():
             ear = mar = None
             yaw = pitch = roll = None
             processed = frame.copy()
-            reason = []
+            reason: List[str] = []
             fused_score = None
+            landmarks_preview = None
+            drowsiness_stage = "normal"
+            stage_reasons: List[str] = []
 
             if results.multi_face_landmarks:
                 lms = results.multi_face_landmarks[0].landmark
@@ -649,6 +857,7 @@ async def camera_loop():
                 yaw, pitch, roll = estimate_head_pose(lms, w, h)
 
                 processed = draw_landmarks_on_frame(frame, lms)
+                landmarks_preview = render_landmark_cloud(lms, w, h)
 
                 # Texto de depuración
                 y0 = 28
@@ -696,8 +905,23 @@ async def camera_loop():
 
                 fused_score = W_EAR*ear_score + W_MAR*mar_score + W_POSE*pose_score
 
+                drowsiness_stage, stage_reasons = evaluate_drowsiness_stage(
+                    ear,
+                    mar,
+                    pitch,
+                    fused_score,
+                    closed_frames,
+                )
+                for desc in stage_reasons:
+                    if desc not in reason:
+                        reason.append(desc)
+
                 # Disparo por fusión O por contador de frames cerrados
-                should_alarm = fused_score >= FUSION_THRESHOLD or closed_frames >= CONSEC_FRAMES
+                should_alarm = (
+                    drowsiness_stage == "drowsy"
+                    or (fused_score is not None and fused_score >= FUSION_THRESHOLD)
+                    or closed_frames >= CONSEC_FRAMES
+                )
 
                 if should_alarm:
                     is_drowsy = True
@@ -717,6 +941,7 @@ async def camera_loop():
                 cv2.putText(processed, 'NO SE DETECTA ROSTRO',
                             (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
                 fused_score = fused_score if fused_score is not None else 0.0
+                reason.append("Sin rostro detectado")
 
             # Actualizar últimas métricas
             last_ear = float(ear) if ear is not None else None
@@ -759,6 +984,11 @@ async def camera_loop():
 
                 fused_value = round(fused_score, 3) if fused_score is not None else None
 
+                threshold_snapshot = _copy_thresholds()
+                mesh_b64 = frame_to_base64(landmarks_preview) if landmarks_preview is not None else None
+                stage_reasons = list(dict.fromkeys(stage_reasons))
+                reason = list(dict.fromkeys(reason))
+
                 payload = {
                     "message_type": "metrics",
                     "ear": round(last_ear, 4) if last_ear is not None else None,
@@ -769,18 +999,17 @@ async def camera_loop():
                     "closedFrames": closed_frames,
                     "threshold": EAR_THRESHOLD,
                     "consecFrames": CONSEC_FRAMES,
-                    "thresholds": {
-                        "ear": EAR_THRESHOLD,
-                        "mar": MAR_THRESHOLD,
-                        "pitch": PITCH_DEG_THRESHOLD,
-                        "fusion": FUSION_THRESHOLD
-                    },
+                    "thresholds": threshold_snapshot,
+                    "thresholdOrder": list(THRESHOLD_TIERS),
                     "weights": {"ear": W_EAR, "mar": W_MAR, "pose": W_POSE},
                     "isDrowsy": is_drowsy,
+                    "drowsinessLevel": drowsiness_stage,
+                    "stageReasons": stage_reasons,
                     "fusedScore": fused_value,
                     "reason": reason,
                     "rawFrame": raw_b64,
                     "processedFrame": proc_b64,
+                    "landmarksFrame": mesh_b64,
                     "config": config_payload,
                 }
                 await broadcast(payload)

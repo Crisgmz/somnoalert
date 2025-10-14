@@ -1,18 +1,131 @@
-class MetricsPayload {
-  final double? ear;
-  final double? mar;
-  final double? yaw;
-  final double? pitch;
-  final double? roll;
-  final double? fusedScore;
-  final int closedFrames;
-  final bool isDrowsy;
-  final Map<String, dynamic> thresholds;
-  final Map<String, dynamic> weights;
-  final String? rawFrameB64;
-  final String? processedFrameB64;
-  final List<String> reason;
+class CameraStateSnapshot {
+  const CameraStateSnapshot({
+    this.index,
+    this.width,
+    this.height,
+    this.fps,
+    this.codec,
+    this.orientation,
+  });
 
+  final int? index;
+  final int? width;
+  final int? height;
+  final int? fps;
+  final String? codec;
+  final String? orientation;
+
+  factory CameraStateSnapshot.fromJson(Map<String, dynamic> json) {
+    int? _asInt(dynamic value) => (value as num?)?.toInt();
+
+    return CameraStateSnapshot(
+      index: _asInt(json['index']),
+      width: _asInt(json['width']),
+      height: _asInt(json['height']),
+      fps: _asInt(json['fps']),
+      codec: json['codec'] as String?,
+      orientation: json['orientation'] as String?,
+    );
+  }
+}
+
+class CameraOptionsSnapshot {
+  const CameraOptionsSnapshot({
+    this.codecs = const [],
+    this.resolutions = const [],
+    this.fps = const [],
+  });
+
+  final List<String> codecs;
+  final List<List<int>> resolutions;
+  final List<int> fps;
+
+  factory CameraOptionsSnapshot.fromJson(Map<String, dynamic> json) {
+    List<List<int>> parseResolutions(dynamic value) {
+      final result = <List<int>>[];
+      if (value is List) {
+        for (final item in value) {
+          if (item is List && item.length >= 2) {
+            final width = (item[0] as num?)?.toInt();
+            final height = (item[1] as num?)?.toInt();
+            if (width != null && height != null) {
+              result.add([width, height]);
+            }
+          } else if (item is Map<String, dynamic>) {
+            final width = (item['width'] as num?)?.toInt();
+            final height = (item['height'] as num?)?.toInt();
+            if (width != null && height != null) {
+              result.add([width, height]);
+            }
+          }
+        }
+      }
+      return result;
+    }
+
+    List<int> parseFps(dynamic value) {
+      final result = <int>[];
+      if (value is List) {
+        for (final item in value) {
+          final fps = (item as num?)?.toInt();
+          if (fps != null) {
+            result.add(fps);
+          }
+        }
+      }
+      return result;
+    }
+
+    return CameraOptionsSnapshot(
+      codecs: (json['codecs'] as List?)?.map((e) => '$e').toList() ?? const [],
+      resolutions: parseResolutions(json['resolutions']),
+      fps: parseFps(json['fps']),
+    );
+  }
+}
+
+class CameraConfigSnapshot {
+  const CameraConfigSnapshot({this.active, this.requested, this.options = const CameraOptionsSnapshot()});
+
+  final CameraStateSnapshot? active;
+  final CameraStateSnapshot? requested;
+  final CameraOptionsSnapshot options;
+
+  factory CameraConfigSnapshot.fromJson(Map<String, dynamic> json) {
+    final active = json['active'];
+    final requested = json['requested'];
+    final options = json['options'];
+
+    return CameraConfigSnapshot(
+      active: active is Map<String, dynamic> ? CameraStateSnapshot.fromJson(active) : null,
+      requested: requested is Map<String, dynamic> ? CameraStateSnapshot.fromJson(requested) : null,
+      options: options is Map<String, dynamic>
+          ? CameraOptionsSnapshot.fromJson(options)
+          : const CameraOptionsSnapshot(),
+    );
+  }
+}
+
+class MetricsConfigSnapshot {
+  const MetricsConfigSnapshot({this.usePythonAlarm, this.camera});
+
+  final bool? usePythonAlarm;
+  final CameraConfigSnapshot? camera;
+
+  factory MetricsConfigSnapshot.fromJson(Map<String, dynamic> json) {
+    final camera = json['camera'];
+
+    return MetricsConfigSnapshot(
+      usePythonAlarm: json['usePythonAlarm'] as bool?,
+      camera: camera is Map<String, dynamic> ? CameraConfigSnapshot.fromJson(camera) : null,
+    );
+  }
+}
+
+import 'config_model.dart';
+import 'thresholds.dart';
+
+class MetricsPayload {
   MetricsPayload({
     this.ear,
     this.mar,
@@ -22,14 +135,82 @@ class MetricsPayload {
     this.fusedScore,
     this.rawFrameB64,
     this.processedFrameB64,
+    this.landmarksFrameB64,
     this.reason = const [],
+    this.stageReasons = const [],
     this.closedFrames = 0,
+    this.consecFrames = 0,
     this.isDrowsy = false,
-    this.thresholds = const {},
+    this.drowsinessLevel,
+    ThresholdsConfig? thresholds,
     this.weights = const {},
-  });
+    this.configSnapshot,
+    DateTime? receivedAt,
+  })  : thresholds = thresholds ?? ThresholdsConfig.defaults(),
+        receivedAt = receivedAt ?? DateTime.now();
+
+  final double? ear;
+  final double? mar;
+  final double? yaw;
+  final double? pitch;
+  final double? roll;
+  final double? fusedScore;
+  final int closedFrames;
+  final int consecFrames;
+  final bool isDrowsy;
+  final String? drowsinessLevel;
+  final ThresholdsConfig thresholds;
+  final Map<String, dynamic> weights;
+  final String? rawFrameB64;
+  final String? processedFrameB64;
+  final String? landmarksFrameB64;
+  final List<String> reason;
+  final List<String> stageReasons;
+  final MetricsConfigSnapshot? configSnapshot;
+  final DateTime receivedAt;
 
   factory MetricsPayload.fromJson(Map<String, dynamic> json) {
+    final config = json['config'];
+    final thresholdsPayload = json['thresholds'];
+
+    ThresholdsConfig thresholds;
+    double _valueFor(String key, double fallbackValue) {
+      if (thresholdsPayload is Map<String, dynamic>) {
+        final direct = thresholdsPayload[key];
+        if (direct is num) return direct.toDouble();
+        final drowsy = thresholdsPayload['drowsy'];
+        if (drowsy is Map<String, dynamic>) {
+          final nested = drowsy[key];
+          if (nested is num) return nested.toDouble();
+        }
+      }
+      return fallbackValue;
+    }
+
+    final fallback = ThresholdsConfig.defaults(
+      baseEar: (json['threshold'] as num?)?.toDouble() ?? _valueFor('ear', ConfigModel.defaultEarThreshold),
+      baseMar: _valueFor('mar', ConfigModel.defaultMarThreshold),
+      basePitch: _valueFor('pitch', ConfigModel.defaultPitchThreshold),
+      baseConsec: (json['consecFrames'] as num?)?.toInt() ??
+          (_valueFor('consecFrames', ConfigModel.defaultConsecFrames.toDouble())).toInt(),
+      baseFusion: _valueFor('fusion', ConfigModel.defaultFusionThreshold),
+    );
+
+    if (thresholdsPayload is Map<String, dynamic> &&
+        thresholdsPayload.values.any((value) => value is Map<String, dynamic>)) {
+      final merged = Map<String, dynamic>.from(thresholdsPayload);
+      if (json['thresholdOrder'] is List && merged['thresholdOrder'] == null) {
+        merged['thresholdOrder'] = json['thresholdOrder'];
+      }
+      thresholds = ThresholdsConfig.fromJson(merged, fallback: fallback);
+    } else if (thresholdsPayload is Map<String, dynamic>) {
+      final drowsy = ThresholdTierConfig.fromJson(thresholdsPayload.cast<String, dynamic>(),
+          fallback: fallback.tier('drowsy'));
+      thresholds = fallback.copyWithTier('drowsy', drowsy);
+    } else {
+      thresholds = fallback;
+    }
+
     return MetricsPayload(
       ear: (json['ear'] as num?)?.toDouble(),
       mar: (json['mar'] as num?)?.toDouble(),
@@ -38,12 +219,19 @@ class MetricsPayload {
       roll: (json['roll'] as num?)?.toDouble(),
       fusedScore: (json['fusedScore'] as num?)?.toDouble(),
       closedFrames: (json['closedFrames'] ?? 0) as int,
+      consecFrames: (json['consecFrames'] ?? 0) as int,
       isDrowsy: (json['isDrowsy'] ?? false) as bool,
-      thresholds: (json['thresholds'] ?? {}) as Map<String, dynamic>,
+      drowsinessLevel: json['drowsinessLevel'] as String?,
+      thresholds: thresholds,
       weights: (json['weights'] ?? {}) as Map<String, dynamic>,
       rawFrameB64: json['rawFrame'] as String?,
       processedFrameB64: json['processedFrame'] as String?,
+      landmarksFrameB64: json['landmarksFrame'] as String?,
       reason: (json['reason'] as List?)?.cast<String>() ?? const [],
+      stageReasons: (json['stageReasons'] as List?)?.map((e) => '$e').toList() ?? const [],
+      configSnapshot: config is Map<String, dynamic> ? MetricsConfigSnapshot.fromJson(config) : null,
     );
   }
+
+  bool get isStale => DateTime.now().difference(receivedAt) > const Duration(seconds: 5);
 }

@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/config_model.dart';
+import '../../models/metrics_payload.dart';
+import '../../models/thresholds.dart';
 import '../../state/config_provider.dart';
 
 class ControlsPanel extends ConsumerStatefulWidget {
@@ -42,6 +44,17 @@ class _ControlsPanelState extends ConsumerState<ControlsPanel> {
     return cfg.wEar + cfg.wMar + cfg.wPose;
   }
 
+  String _tierLabel(String tier) {
+    switch (tier) {
+      case 'signs':
+        return 'Signos de somnolencia';
+      case 'drowsy':
+        return 'Somnolencia';
+      default:
+        return 'Normal';
+    }
+  }
+
   Future<void> _save() async {
     final cfg = _editing;
     if (cfg == null) return;
@@ -72,6 +85,7 @@ class _ControlsPanelState extends ConsumerState<ControlsPanel> {
     final state = ref.watch(configProvider);
     _editing ??= state.config?.copy();
     final cfg = _editing;
+    final cameraSnapshot = state.liveSnapshot?.camera;
 
     if (cfg == null) {
       return Container(
@@ -111,64 +125,50 @@ class _ControlsPanelState extends ConsumerState<ControlsPanel> {
             'Controles',
             style: theme.textTheme.titleMedium?.copyWith(color: Colors.white, fontWeight: FontWeight.bold),
           ),
+          if (cameraSnapshot != null) ...[
+            const SizedBox(height: 12),
+            _CameraSummary(camera: cameraSnapshot),
+          ],
           const SizedBox(height: 16),
-          _SliderRow(
-            label: 'EAR Threshold',
-            value: cfg.earThr,
-            min: 0.05,
-            max: 0.4,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.earThr = value;
-              _editing = updated;
-            }),
-          ),
-          _SliderRow(
-            label: 'MAR Threshold',
-            value: cfg.marThr,
-            min: 0.2,
-            max: 1.0,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.marThr = value;
-              _editing = updated;
-            }),
-          ),
-          _SliderRow(
-            label: 'Pitch Threshold',
-            value: cfg.pitchThr,
-            min: 5,
-            max: 40,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.pitchThr = value;
-              _editing = updated;
-            }),
-            suffix: '°',
-          ),
-          _SliderRow(
-            label: 'Fusión Threshold',
-            value: cfg.fusionThr,
-            min: 0.1,
-            max: 1,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.fusionThr = value;
-              _editing = updated;
-            }),
-          ),
-          _SliderRow(
-            label: 'Frames consecutivos',
-            value: cfg.consecFrames.toDouble(),
-            min: 10,
-            max: 120,
-            divisions: 22,
-            onChanged: (value) => setState(() {
-              final updated = cfg.copy();
-              updated.consecFrames = value.round();
-              _editing = updated;
-            }),
-            decimals: 0,
+          DefaultTabController(
+            length: cfg.thresholds.order.length,
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                TabBar(
+                  isScrollable: true,
+                  labelColor: Colors.white,
+                  unselectedLabelColor: Colors.white60,
+                  indicatorColor: Colors.blueAccent,
+                  tabs: [
+                    for (final tier in cfg.thresholds.order)
+                      Tab(text: _tierLabel(tier)),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                SizedBox(
+                  height: 260,
+                  child: TabBarView(
+                    children: [
+                      for (final tier in cfg.thresholds.order)
+                        SingleChildScrollView(
+                          child: _TierEditor(
+                            tierKey: tier,
+                            tier: cfg.thresholds.tier(tier),
+                            onChanged: (updatedTier) {
+                              setState(() {
+                                final updatedConfig = cfg.copy();
+                                updatedConfig.updateTier(tier, updatedTier);
+                                _editing = updatedConfig;
+                              });
+                            },
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
           const Divider(color: Colors.white12, height: 32),
           Text('Pesos de fusión', style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70)),
@@ -311,6 +311,166 @@ class _SliderRow extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+class _CameraSummary extends StatelessWidget {
+  const _CameraSummary({required this.camera});
+
+  final CameraConfigSnapshot camera;
+
+  String _describeState(String label, CameraStateSnapshot? state) {
+    if (state == null) {
+      return '$label: --';
+    }
+
+    final parts = <String>[];
+    if (state.index != null) parts.add('#${state.index}');
+    if (state.width != null && state.height != null) {
+      parts.add('${state.width}x${state.height}');
+    }
+    if (state.fps != null) parts.add('${state.fps} fps');
+    if (state.codec != null) parts.add(state.codec!);
+    if (state.orientation != null && state.orientation != 'none') {
+      parts.add('rot ${state.orientation}');
+    }
+    final description = parts.isEmpty ? '--' : parts.join(' · ');
+    return '$label: $description';
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    final options = camera.options;
+
+    return Container(
+      width: double.infinity,
+      decoration: BoxDecoration(
+        color: const Color(0xFF20263C),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(color: Colors.white10),
+      ),
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Estado de cámara',
+            style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70, fontWeight: FontWeight.w600),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            _describeState('Activa', camera.active),
+            style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            _describeState('Solicitada', camera.requested),
+            style: theme.textTheme.bodySmall?.copyWith(color: Colors.white60),
+          ),
+          if (options.codecs.isNotEmpty || options.resolutions.isNotEmpty || options.fps.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                if (options.codecs.isNotEmpty)
+                  _InfoChip(text: 'Codecs: ${options.codecs.take(3).join(', ')}'),
+                if (options.resolutions.isNotEmpty)
+                  _InfoChip(
+                    text: 'Resoluciones: ${options.resolutions.take(3).map((e) => '${e[0]}x${e[1]}').join(', ')}',
+                  ),
+                if (options.fps.isNotEmpty)
+                  _InfoChip(text: 'FPS: ${options.fps.take(3).join('/')}'),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _InfoChip extends StatelessWidget {
+  const _InfoChip({required this.text});
+
+  final String text;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white10,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: Text(
+        text,
+        style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
+      ),
+    );
+  }
+}
+
+class _TierEditor extends StatelessWidget {
+  const _TierEditor({required this.tierKey, required this.tier, required this.onChanged});
+
+  final String tierKey;
+  final ThresholdTierConfig tier;
+  final ValueChanged<ThresholdTierConfig> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          'Ajustes para ${tierKey == 'drowsy' ? 'somnolencia' : tierKey == 'signs' ? 'signos' : 'normal'}',
+          style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70, fontWeight: FontWeight.w600),
+        ),
+        const SizedBox(height: 8),
+        _SliderRow(
+          label: 'EAR',
+          value: tier.ear,
+          min: 0.05,
+          max: 0.45,
+          onChanged: (value) => onChanged(tier.copyWith(ear: value)),
+        ),
+        _SliderRow(
+          label: 'MAR',
+          value: tier.mar,
+          min: 0.2,
+          max: 1.2,
+          onChanged: (value) => onChanged(tier.copyWith(mar: value)),
+        ),
+        _SliderRow(
+          label: 'Pitch',
+          value: tier.pitch,
+          min: 5,
+          max: 60,
+          onChanged: (value) => onChanged(tier.copyWith(pitch: value)),
+          suffix: '°',
+        ),
+        _SliderRow(
+          label: 'Fusión',
+          value: tier.fusion,
+          min: 0.1,
+          max: 1.0,
+          onChanged: (value) => onChanged(tier.copyWith(fusion: value)),
+        ),
+        _SliderRow(
+          label: 'Frames consecutivos',
+          value: tier.consecFrames.toDouble(),
+          min: 5,
+          max: 150,
+          divisions: 29,
+          onChanged: (value) => onChanged(tier.copyWith(consecFrames: value.round())),
+          decimals: 0,
+        ),
+      ],
     );
   }
 }

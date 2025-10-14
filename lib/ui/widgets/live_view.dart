@@ -7,6 +7,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/utils/base64_image.dart';
 import '../../models/metrics_payload.dart';
 import '../../state/metrics_provider.dart';
+import '../../state/ws_provider.dart';
 
 class LiveView extends ConsumerStatefulWidget {
   const LiveView({super.key});
@@ -16,14 +17,28 @@ class LiveView extends ConsumerStatefulWidget {
 }
 
 class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClientMixin {
-  bool _showProcessed = true;
+  _ViewMode _mode = _ViewMode.processed;
   String? _lastRaw;
   String? _lastProcessed;
+  String? _lastLandmarks;
   Uint8List? _rawBytes;
   Uint8List? _processedBytes;
+  Uint8List? _landmarkBytes;
+  DateTime? _lastFrameAt;
 
   @override
   bool get wantKeepAlive => true;
+
+  String _modeDescription(_ViewMode mode) {
+    switch (mode) {
+      case _ViewMode.processed:
+        return 'Procesado con overlay';
+      case _ViewMode.raw:
+        return 'Frame sin procesar';
+      case _ViewMode.landmarks:
+        return 'Nube de puntos faciales';
+    }
+  }
 
   void _updateFrames(MetricsPayload? payload) {
     final raw = payload?.rawFrameB64;
@@ -43,6 +58,19 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
         _lastProcessed = processed;
       }
     }
+
+    final landmarks = payload?.landmarksFrameB64;
+    if (landmarks != null && landmarks != _lastLandmarks) {
+      final decoded = decodeBase64Image(landmarks);
+      if (decoded != null) {
+        _landmarkBytes = decoded;
+        _lastLandmarks = landmarks;
+      }
+    }
+
+    if (payload != null) {
+      _lastFrameAt = payload.receivedAt;
+    }
   }
 
   @override
@@ -51,7 +79,40 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
     final metrics = ref.watch(metricsProvider);
     _updateFrames(metrics);
 
-    final imageBytes = _showProcessed ? _processedBytes ?? _rawBytes : _rawBytes ?? _processedBytes;
+    final connection = ref.watch(socketConnectionProvider);
+
+    _SocketStatus socketStatus = _SocketStatus.connecting;
+    connection.when(
+      data: (value) {
+        socketStatus = value ? _SocketStatus.connected : _SocketStatus.disconnected;
+      },
+      error: (_, __) {
+        socketStatus = _SocketStatus.disconnected;
+      },
+      loading: () {
+        socketStatus = _SocketStatus.connecting;
+      },
+    );
+
+    Uint8List? imageBytes;
+    switch (_mode) {
+      case _ViewMode.processed:
+        imageBytes = _processedBytes ?? _rawBytes ?? _landmarkBytes;
+        break;
+      case _ViewMode.raw:
+        imageBytes = _rawBytes ?? _processedBytes ?? _landmarkBytes;
+        break;
+      case _ViewMode.landmarks:
+        imageBytes = _landmarkBytes ?? _processedBytes ?? _rawBytes;
+        break;
+    }
+    final hasFrame = imageBytes != null;
+    final lastFrameAt = _lastFrameAt;
+    final isStale = metrics?.isStale ??
+        (lastFrameAt == null
+            ? true
+            : DateTime.now().difference(lastFrameAt) > const Duration(seconds: 5));
+    final waitingForFrames = !hasFrame && socketStatus != _SocketStatus.disconnected;
 
     return RepaintBoundary(
       child: Container(
@@ -81,19 +142,21 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                               ),
                         ),
                         Text(
-                          _showProcessed ? 'Procesado con overlay' : 'Frame sin procesar',
+                          _modeDescription(_mode),
                           style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
                         ),
                       ],
                     ),
                   ),
+                  const SizedBox(width: 12),
+                  _ConnectionBadge(status: socketStatus),
                   Container(
                     decoration: BoxDecoration(
                       color: Colors.black26,
                       borderRadius: BorderRadius.circular(30),
                     ),
                     child: ToggleButtons(
-                      isSelected: [_showProcessed, !_showProcessed],
+                      isSelected: _ViewMode.values.map((m) => m == _mode).toList(),
                       borderRadius: BorderRadius.circular(30),
                       fillColor: Colors.blueAccent,
                       selectedColor: Colors.white,
@@ -101,7 +164,7 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                       constraints: const BoxConstraints(minHeight: 36, minWidth: 80),
                       onPressed: (index) {
                         setState(() {
-                          _showProcessed = index == 0;
+                          _mode = _ViewMode.values[index];
                         });
                       },
                       children: const [
@@ -112,6 +175,10 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                         Padding(
                           padding: EdgeInsets.symmetric(horizontal: 8),
                           child: Text('Raw'),
+                        ),
+                        Padding(
+                          padding: EdgeInsets.symmetric(horizontal: 8),
+                          child: Text('Puntos'),
                         ),
                       ],
                     ),
@@ -139,8 +206,131 @@ class _LiveViewState extends ConsumerState<LiveView> with AutomaticKeepAliveClie
                         ),
                       ),
                     _OverlayMetrics(metrics: metrics),
+                    if (socketStatus != _SocketStatus.connected)
+                      _StatusBanner(
+                        icon: Icons.wifi_tethering_off,
+                        message: socketStatus == _SocketStatus.connecting
+                            ? 'Conectando con el backend...'
+                            : 'Conexión perdida. Reintentando...',
+                      )
+                    else if (waitingForFrames)
+                      const _StatusBanner(
+                        icon: Icons.hourglass_top,
+                        message: 'Esperando primeros frames... Asegúrate de que la cámara esté activa.',
+                      )
+                    else if (isStale)
+                      _StatusBanner(
+                        icon: Icons.schedule,
+                        message: 'Sin datos recientes · ${_humanizeDelay(_lastFrameAt)}',
+                      ),
                   ],
                 ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+String _humanizeDelay(DateTime? instant) {
+  if (instant == null) return '--';
+  final diff = DateTime.now().difference(instant).inSeconds;
+  if (diff < 1) return 'instante';
+  if (diff == 1) return '1 s';
+  if (diff < 60) return '$diff s';
+  final minutes = (diff / 60).floor();
+  if (minutes == 1) return '1 min';
+  return '$minutes min';
+}
+
+enum _SocketStatus { connected, connecting, disconnected }
+
+enum _ViewMode { processed, raw, landmarks }
+
+class _ConnectionBadge extends StatelessWidget {
+  const _ConnectionBadge({required this.status});
+
+  final _SocketStatus status;
+
+  Color get _color {
+    switch (status) {
+      case _SocketStatus.connected:
+        return Colors.greenAccent;
+      case _SocketStatus.connecting:
+        return Colors.orangeAccent;
+      case _SocketStatus.disconnected:
+        return Colors.redAccent;
+    }
+  }
+
+  String get _label {
+    switch (status) {
+      case _SocketStatus.connected:
+        return 'Conectado';
+      case _SocketStatus.connecting:
+        return 'Conectando';
+      case _SocketStatus.disconnected:
+        return 'Sin conexión';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+      decoration: BoxDecoration(
+        color: _color.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(999),
+        border: Border.all(color: _color.withOpacity(0.6)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Container(
+            width: 8,
+            height: 8,
+            decoration: BoxDecoration(color: _color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 6),
+          Text(
+            _label,
+            style: Theme.of(context).textTheme.labelMedium?.copyWith(color: Colors.white),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _StatusBanner extends StatelessWidget {
+  const _StatusBanner({required this.icon, required this.message});
+
+  final IconData icon;
+  final String message;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      alignment: Alignment.topCenter,
+      padding: const EdgeInsets.all(16),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        decoration: BoxDecoration(
+          color: Colors.black54,
+          borderRadius: BorderRadius.circular(16),
+          border: Border.all(color: Colors.white24),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(icon, color: Colors.white70),
+            const SizedBox(width: 12),
+            Flexible(
+              child: Text(
+                message,
+                style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
               ),
             ),
           ],
@@ -155,12 +345,36 @@ class _OverlayMetrics extends StatelessWidget {
 
   final MetricsPayload? metrics;
 
+  String get _stage => metrics?.drowsinessLevel ?? (metrics?.isDrowsy == true ? 'drowsy' : 'normal');
+
   Color _statusColor(BuildContext context) {
-    if (metrics?.isDrowsy == true) return Colors.redAccent;
-    if ((metrics?.fusedScore ?? 0) > ((metrics?.thresholds['fusion'] as num?)?.toDouble() ?? 0.7)) {
-      return Colors.orangeAccent;
+    switch (_stage) {
+      case 'drowsy':
+        return Colors.redAccent;
+      case 'signs':
+        return Colors.orangeAccent;
+      default:
+        return Colors.greenAccent;
     }
-    return Colors.greenAccent;
+  }
+
+  String get _statusLabel {
+    switch (_stage) {
+      case 'drowsy':
+        return 'Somnolencia';
+      case 'signs':
+        return 'Signos de alerta';
+      default:
+        return 'Atento';
+    }
+  }
+
+  List<String> get _reasons {
+    final stageReasons = metrics?.stageReasons ?? const [];
+    if (stageReasons.isNotEmpty) {
+      return stageReasons;
+    }
+    return metrics?.reason ?? const [];
   }
 
   @override
@@ -170,7 +384,7 @@ class _OverlayMetrics extends StatelessWidget {
     }
 
     final textTheme = Theme.of(context).textTheme;
-    final reason = metrics!.reason;
+    final reason = _reasons;
 
     return Padding(
       padding: const EdgeInsets.all(16),
@@ -188,7 +402,7 @@ class _OverlayMetrics extends StatelessWidget {
                   border: Border.all(color: _statusColor(context)),
                 ),
                 child: Text(
-                  metrics!.isDrowsy ? 'ALERTA' : 'Atento',
+                  _statusLabel,
                   style: textTheme.labelLarge?.copyWith(
                     color: _statusColor(context),
                     fontWeight: FontWeight.bold,
