@@ -1,5 +1,4 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 
 import '../core/api/config_api.dart';
 import '../models/config_model.dart';
@@ -28,12 +27,16 @@ class ConfigState {
   }
 }
 
-class ConfigNotifier extends StateNotifier<ConfigState> {
-  ConfigNotifier(this._api) : super(const ConfigState()) {
-    load();
-  }
+class ConfigNotifier extends Notifier<ConfigState> {
+  late final ConfigApi _api;
 
-  final ConfigApi _api;
+  @override
+  ConfigState build() {
+    _api = ref.watch(configApiProvider);
+    // Load initial config asynchronously
+    Future.microtask(load);
+    return const ConfigState();
+  }
 
   Future<void> load() async {
     state = state.copyWith(loading: true, error: null);
@@ -66,26 +69,26 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
 
     double? _asDouble(dynamic value) => (value as num?)?.toDouble();
 
-    final ear = _asDouble(thresholds['ear']);
-    if (ear != null && ear != updated.earThr) {
+    final ear = thresholds.tier('drowsy').ear;
+    if (ear != updated.earThr) {
       updated.earThr = ear;
       changed = true;
     }
 
-    final mar = _asDouble(thresholds['mar']);
-    if (mar != null && mar != updated.marThr) {
+    final mar = thresholds.tier('drowsy').mar;
+    if (mar != updated.marThr) {
       updated.marThr = mar;
       changed = true;
     }
 
-    final pitch = _asDouble(thresholds['pitch']);
-    if (pitch != null && pitch != updated.pitchThr) {
+    final pitch = thresholds.tier('drowsy').pitch;
+    if (pitch != updated.pitchThr) {
       updated.pitchThr = pitch;
       changed = true;
     }
 
-    final fusion = _asDouble(thresholds['fusion']);
-    if (fusion != null && fusion != updated.fusionThr) {
+    final fusion = thresholds.tier('drowsy').fusion;
+    if (fusion != updated.fusionThr) {
       updated.fusionThr = fusion;
       changed = true;
     }
@@ -132,10 +135,7 @@ class ConfigNotifier extends StateNotifier<ConfigState> {
   }
 }
 
-final configProvider = StateNotifierProvider<ConfigNotifier, ConfigState>((ref) {
-  final api = ref.watch(configApiProvider);
-  return ConfigNotifier(api);
-});
+final configProvider = NotifierProvider<ConfigNotifier, ConfigState>(ConfigNotifier.new);
 
 final configApiProvider = Provider<ConfigApi>((ref) {
   final baseUrl = ref.watch(backendBaseUrlProvider);

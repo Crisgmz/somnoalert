@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/config_model.dart';
 import '../../models/metrics_payload.dart';
+import '../../models/thresholds.dart';
 import '../../state/config_provider.dart';
 
 class ControlsPanel extends ConsumerStatefulWidget {
@@ -387,6 +388,81 @@ class _CameraSummary extends StatelessWidget {
           ],
         ],
       ),
+    );
+  }
+}
+
+class _TierEditor extends StatelessWidget {
+  const _TierEditor({
+    required this.tierKey,
+    required this.tier,
+    required this.onChanged,
+  });
+
+  final String tierKey;
+  final ThresholdTierConfig tier;
+  final ValueChanged<ThresholdTierConfig> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text('Editar "${tierKey.toUpperCase()}"', style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white70)),
+        const SizedBox(height: 8),
+        _SliderRow(
+          label: 'EAR',
+          value: tier.ear,
+          min: 0.05,
+          max: 0.6,
+          onChanged: (v) => onChanged(tier.copyWith(ear: v)),
+        ),
+        _SliderRow(
+          label: 'MAR',
+          value: tier.mar,
+          min: 0.2,
+          max: 1.5,
+          onChanged: (v) => onChanged(tier.copyWith(mar: v)),
+        ),
+        _SliderRow(
+          label: 'Pitch (|deg|)',
+          value: tier.pitch,
+          min: 1,
+          max: 90,
+          decimals: 1,
+          onChanged: (v) => onChanged(tier.copyWith(pitch: v)),
+        ),
+        _SliderRow(
+          label: 'Fusión',
+          value: tier.fusion,
+          min: 0.05,
+          max: 1.0,
+          onChanged: (v) => onChanged(tier.copyWith(fusion: v)),
+        ),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Row(
+            children: [
+              Expanded(
+                child: Text(
+                  'Frames consecutivos',
+                  style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white70),
+                ),
+              ),
+              Text('${tier.consecFrames}', style: theme.textTheme.bodyMedium?.copyWith(color: Colors.white)),
+            ],
+          ),
+        ),
+        Slider(
+          value: tier.consecFrames.toDouble().clamp(1, 300),
+          min: 1,
+          max: 300,
+          divisions: 299,
+          label: '${tier.consecFrames}',
+          onChanged: (v) => onChanged(tier.copyWith(consecFrames: v.round())),
+        ),
+      ],
     );
   }
 }

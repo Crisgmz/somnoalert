@@ -115,7 +115,7 @@ class ThresholdsConfig {
       for (final entry in map.entries) {
         final value = entry.value;
         if (value is Map<String, dynamic>) {
-          tiers[entry.key] = ThresholdTierConfig.fromJson(value, fallback?.tiers[entry.key]);
+          tiers[entry.key] = ThresholdTierConfig.fromJson(value, fallback: fallback?.tiers[entry.key]);
         }
       }
     }

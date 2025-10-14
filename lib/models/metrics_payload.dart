@@ -1,3 +1,5 @@
+import 'thresholds.dart';
+
 class CameraStateSnapshot {
   const CameraStateSnapshot({
     this.index,
@@ -143,7 +145,8 @@ class MetricsPayload {
     this.weights = const {},
     this.configSnapshot,
     DateTime? receivedAt,
-  }) : receivedAt = receivedAt ?? DateTime.now();
+  })  : thresholds = thresholds ?? ThresholdsConfig.defaults(),
+        receivedAt = receivedAt ?? DateTime.now();
 
   final double? ear;
   final double? mar;
@@ -154,16 +157,30 @@ class MetricsPayload {
   final int closedFrames;
   final int consecFrames;
   final bool isDrowsy;
-  final Map<String, dynamic> thresholds;
+  final ThresholdsConfig thresholds;
   final Map<String, dynamic> weights;
   final String? rawFrameB64;
   final String? processedFrameB64;
+  final String? landmarksFrameB64;
   final List<String> reason;
+  final List<String> stageReasons;
+  final String? drowsinessLevel;
   final MetricsConfigSnapshot? configSnapshot;
   final DateTime receivedAt;
 
   factory MetricsPayload.fromJson(Map<String, dynamic> json) {
     final config = json['config'];
+    final rawThresholds = json['thresholds'];
+    ThresholdsConfig thresholdsCfg;
+    if (rawThresholds is Map<String, dynamic>) {
+      final merged = Map<String, dynamic>.from(rawThresholds);
+      if (json['thresholdOrder'] is List && merged['thresholdOrder'] == null) {
+        merged['thresholdOrder'] = json['thresholdOrder'];
+      }
+      thresholdsCfg = ThresholdsConfig.fromJson(merged, fallback: ThresholdsConfig.defaults());
+    } else {
+      thresholdsCfg = ThresholdsConfig.defaults();
+    }
 
     return MetricsPayload(
       ear: (json['ear'] as num?)?.toDouble(),
@@ -176,12 +193,13 @@ class MetricsPayload {
       consecFrames: (json['consecFrames'] ?? 0) as int,
       isDrowsy: (json['isDrowsy'] ?? false) as bool,
       drowsinessLevel: json['drowsinessLevel'] as String?,
-      thresholds: thresholds,
+      thresholds: thresholdsCfg,
       weights: (json['weights'] ?? {}) as Map<String, dynamic>,
       rawFrameB64: json['rawFrame'] as String?,
       processedFrameB64: json['processedFrame'] as String?,
       landmarksFrameB64: json['landmarksFrame'] as String?,
       reason: (json['reason'] as List?)?.cast<String>() ?? const [],
+      stageReasons: (json['stageReasons'] as List?)?.cast<String>() ?? const [],
       configSnapshot: config is Map<String, dynamic> ? MetricsConfigSnapshot.fromJson(config) : null,
     );
   }

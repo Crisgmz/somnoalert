@@ -1,5 +1,4 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:flutter_riverpod/legacy.dart';
 
 import '../models/events.dart';
 
@@ -45,8 +44,9 @@ class EventsState {
   }
 }
 
-class EventsNotifier extends StateNotifier<EventsState> {
-  EventsNotifier() : super(const EventsState());
+class EventsNotifier extends Notifier<EventsState> {
+  @override
+  EventsState build() => const EventsState();
 
   static const _toastThrottle = Duration(seconds: 1);
 
@@ -99,6 +99,6 @@ class EventsNotifier extends StateNotifier<EventsState> {
   }
 }
 
-final eventsProvider = StateNotifierProvider<EventsNotifier, EventsState>(
-  (ref) => EventsNotifier(),
+final eventsProvider = NotifierProvider<EventsNotifier, EventsState>(
+  EventsNotifier.new,
 );
