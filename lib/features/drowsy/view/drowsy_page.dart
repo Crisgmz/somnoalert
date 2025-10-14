@@ -16,8 +16,15 @@ class DrowsyPage extends ConsumerStatefulWidget {
 
 class _DrowsyPageState extends ConsumerState<DrowsyPage> {
   final _backendCtrl = TextEditingController(text: 'http://127.0.0.1:8000');
-  double _threshold = 0.20;
+
+  // Umbrales y pesos locales (se actualizan con lo que llega del backend)
+  double _threshold = 0.20; // EAR
   double _frames = 50;
+  double _marThr = 0.60;
+  double _pitchThr = 20;
+  double _fusionThr = 0.70;
+  double _wEar = 0.5, _wMar = 0.3, _wPose = 0.2;
+
   bool _localAlarm = true;
   bool _isAutoConnecting = false;
 
@@ -37,7 +44,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
       WakelockPlus.enable();
     }
 
-    // Solo conectar logs si no es web
+    // Logs solo en desktop
     if (!kIsWeb) {
       _runnerLogStream = ref.read(drowsyControllerProvider.notifier).runnerLogs;
       _runnerLogStream.listen((line) {
@@ -60,34 +67,24 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
 
   Future<void> _autoConnectWeb() async {
     setState(() => _isAutoConnecting = true);
-
-    // Intentar conectar automáticamente en web
     try {
       final controller = ref.read(drowsyControllerProvider.notifier);
       await controller.setBackendBase(_backendCtrl.text);
 
-      // Esperar un momento y verificar si hay conexión
       await Future.delayed(const Duration(seconds: 2));
 
       final isHealthy = await controller.checkBackendHealth();
       if (mounted) {
-        if (isHealthy) {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text('Conectado al backend automáticamente'),
-              backgroundColor: Colors.green,
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              isHealthy
+                  ? 'Conectado al backend automáticamente'
+                  : 'No se pudo conectar al backend. Verifica que esté ejecutándose.',
             ),
-          );
-        } else {
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'No se pudo conectar al backend. Verifica que esté ejecutándose.',
-              ),
-              backgroundColor: Colors.orange,
-            ),
-          );
-        }
+            backgroundColor: isHealthy ? Colors.green : Colors.orange,
+          ),
+        );
       }
     } catch (e) {
       if (mounted) {
@@ -99,9 +96,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
         );
       }
     } finally {
-      if (mounted) {
-        setState(() => _isAutoConnecting = false);
-      }
+      if (mounted) setState(() => _isAutoConnecting = false);
     }
   }
 
@@ -215,7 +210,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
               ),
             ),
             const SizedBox(height: 16),
-            // Logs solo en desktop
             if (!kIsWeb) _logsCard(),
           ],
         ),
@@ -229,6 +223,14 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
   ) {
     next.whenData((metrics) {
       if (metrics == null) return;
+
+      // Actualizar sliders con lo que mande el backend (si viene)
+      _marThr = metrics.marThreshold ?? _marThr;
+      _pitchThr = metrics.pitchDegThreshold ?? _pitchThr;
+      _fusionThr = metrics.fusionThreshold ?? _fusionThr;
+      _wEar = metrics.wEar ?? _wEar;
+      _wMar = metrics.wMar ?? _wMar;
+      _wPose = metrics.wPose ?? _wPose;
 
       final isDrowsy = metrics.isDrowsy;
       if (isDrowsy != _wasAlerting) {
@@ -251,9 +253,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
               isAlert: isDrowsy,
             ),
           );
-          if (_alertLog.length > 20) {
-            _alertLog.removeLast();
-          }
+          if (_alertLog.length > 20) _alertLog.removeLast();
           _wasAlerting = isDrowsy;
         });
       } else {
@@ -280,8 +280,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
               ],
             ),
             const SizedBox(height: 12),
-
-            // Instrucciones para web
             Container(
               padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
@@ -324,8 +322,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
               ),
             ),
             const SizedBox(height: 12),
-
-            // Estado de conexión automática
             if (_isAutoConnecting)
               Container(
                 padding: const EdgeInsets.all(12),
@@ -349,10 +345,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                   ],
                 ),
               ),
-
             const SizedBox(height: 12),
-
-            // URL + botón Conectar
             Row(
               children: [
                 Expanded(
@@ -391,7 +384,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                           );
                           final isHealthy = await controller
                               .checkBackendHealth();
-
                           if (mounted) {
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
@@ -437,8 +429,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
               style: Theme.of(context).textTheme.titleMedium,
             ),
             const SizedBox(height: 12),
-
-            // ——— Botones Runner Desktop ———
             Wrap(
               spacing: 8,
               runSpacing: 8,
@@ -450,7 +440,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                       final ok = await ref
                           .read(drowsyControllerProvider.notifier)
                           .startLocalBackend(setUrlAndConnect: true);
-
                       if (ok) {
                         _backendCtrl.text = 'http://127.0.0.1:8000';
                         if (mounted) {
@@ -481,7 +470,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                   icon: const Icon(Icons.play_circle_fill),
                   label: const Text('Arrancar backend local'),
                 ),
-
                 ElevatedButton.icon(
                   onPressed: backendUp
                       ? () async {
@@ -513,8 +501,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
               ],
             ),
             const SizedBox(height: 12),
-
-            // ——— URL + botón Conectar manual ———
             Row(
               children: [
                 Expanded(
@@ -558,20 +544,40 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
 
   Widget _buildDashboard(DrowsyMetrics? metrics) {
     final earValue = metrics?.ear;
+    final marValue = metrics?.mar;
+    final yaw = metrics?.yaw, pitch = metrics?.pitch, roll = metrics?.roll;
+    final fused = metrics?.fusedScore;
+    final reasons = metrics?.reason ?? [];
+
     final earText = earValue != null ? earValue.toStringAsFixed(3) : '--';
+    final marText = marValue != null ? marValue.toStringAsFixed(3) : '--';
+    final poseText = (pitch != null || yaw != null || roll != null)
+        ? 'P:${pitch?.toStringAsFixed(1) ?? "--"}°  '
+              'Y:${yaw?.toStringAsFixed(1) ?? "--"}°  '
+              'R:${roll?.toStringAsFixed(1) ?? "--"}°'
+        : '--';
+    final fusedText = fused != null ? fused.toStringAsFixed(2) : '--';
+
     final closedFrames = metrics?.closedFrames ?? 0;
     final isDrowsy = metrics?.isDrowsy ?? false;
-    final currentThreshold = metrics?.threshold ?? _threshold;
+
+    final currentThreshold = metrics?.threshold ?? _threshold; // EAR
     final currentFrames = metrics?.consecFrames ?? _frames.toInt();
 
-    if (metrics != null) {
-      _threshold = currentThreshold;
-      _frames = currentFrames.toDouble();
-    }
+    // Actualizar UI local con valores más recientes
+    _threshold = currentThreshold;
+    _frames = currentFrames.toDouble();
+    _marThr = metrics?.marThreshold ?? _marThr;
+    _pitchThr = metrics?.pitchDegThreshold ?? _pitchThr;
+    _fusionThr = metrics?.fusionThreshold ?? _fusionThr;
+    _wEar = metrics?.wEar ?? _wEar;
+    _wMar = metrics?.wMar ?? _wMar;
+    _wPose = metrics?.wPose ?? _wPose;
 
     if (metrics?.rawFrame != null) _lastRawFrame = metrics!.rawFrame;
-    if (metrics?.processedFrame != null)
+    if (metrics?.processedFrame != null) {
       _lastProcessedFrame = metrics!.processedFrame;
+    }
 
     final rawFrame = metrics?.rawFrame ?? _lastRawFrame;
     final processedFrame = metrics?.processedFrame ?? _lastProcessedFrame;
@@ -581,8 +587,11 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
       children: [
         _alertBanner(
           isDrowsy: isDrowsy,
-          earText: earText,
-          closedFrames: closedFrames,
+          info: isDrowsy
+              ? (reasons.isEmpty
+                    ? 'Alertas: —'
+                    : 'Alertas: ${reasons.join(", ")}')
+              : 'EAR $earText · Frames cerrados: $closedFrames',
         ),
         const SizedBox(height: 16),
         _cameraGrid(
@@ -590,11 +599,15 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
           processedFrame: processedFrame,
           isAlert: isDrowsy,
           earText: earText,
+          marText: marText,
           closedFrames: closedFrames,
         ),
         const SizedBox(height: 16),
         _metricsCard(
           earText: earText,
+          marText: marText,
+          poseText: poseText,
+          fusedText: fusedText,
           closedFrames: closedFrames,
           isDrowsy: isDrowsy,
           threshold: currentThreshold,
@@ -610,11 +623,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
     );
   }
 
-  Widget _alertBanner({
-    required bool isDrowsy,
-    required String earText,
-    required int closedFrames,
-  }) {
+  Widget _alertBanner({required bool isDrowsy, required String info}) {
     final color = isDrowsy ? Colors.redAccent : Colors.green;
     final background = isDrowsy
         ? Colors.redAccent.withOpacity(0.12)
@@ -623,9 +632,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
         ? Icons.warning_amber_rounded
         : Icons.check_circle_outline;
     final title = isDrowsy ? 'ALERTA DE SOMNOLENCIA' : 'Monitoreo estable';
-    final subtitle = isDrowsy
-        ? 'Ojos cerrados detectados durante $closedFrames frames consecutivos.'
-        : 'EAR actual $earText · Frames cerrados: $closedFrames';
 
     return AnimatedContainer(
       duration: const Duration(milliseconds: 300),
@@ -655,7 +661,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                   ),
                 ),
                 const SizedBox(height: 4),
-                Text(subtitle, style: Theme.of(context).textTheme.bodyMedium),
+                Text(info, style: Theme.of(context).textTheme.bodyMedium),
               ],
             ),
           ),
@@ -669,6 +675,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
     required Uint8List? processedFrame,
     required bool isAlert,
     required String earText,
+    required String marText,
     required int closedFrames,
   }) {
     final cards = <Widget>[];
@@ -679,6 +686,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
           bytes: rawFrame,
           isAlert: isAlert,
           earText: earText,
+          marText: marText,
           closedFrames: closedFrames,
         ),
       );
@@ -690,6 +698,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
           bytes: processedFrame,
           isAlert: isAlert,
           earText: earText,
+          marText: marText,
           closedFrames: closedFrames,
         ),
       );
@@ -718,6 +727,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
     required Uint8List bytes,
     required bool isAlert,
     required String earText,
+    required String marText,
     required int closedFrames,
   }) {
     final earStyle = TextStyle(
@@ -816,6 +826,20 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                   ),
                   const SizedBox(width: 6),
                   Text('EAR $earText', style: earStyle),
+                  const SizedBox(width: 12),
+                  const Icon(
+                    Icons.mood_outlined,
+                    color: Colors.white,
+                    size: 16,
+                  ),
+                  const SizedBox(width: 6),
+                  Text(
+                    'MAR $marText',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
                   const Spacer(),
                   Text(
                     'Frames: $closedFrames',
@@ -868,46 +892,6 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                   color: theme.colorScheme.onSurfaceVariant,
                 ),
               ),
-              if (kIsWeb) ...[
-                const SizedBox(height: 16),
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  margin: const EdgeInsets.symmetric(horizontal: 24),
-                  decoration: BoxDecoration(
-                    color: Colors.blue.withOpacity(0.1),
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.blue.withOpacity(0.3)),
-                  ),
-                  child: Column(
-                    children: [
-                      Row(
-                        mainAxisAlignment: MainAxisAlignment.center,
-                        children: [
-                          Icon(
-                            Icons.camera_alt,
-                            color: Colors.blue[700],
-                            size: 20,
-                          ),
-                          const SizedBox(width: 8),
-                          Text(
-                            'Permisos de cámara requeridos',
-                            style: TextStyle(
-                              fontWeight: FontWeight.bold,
-                              color: Colors.blue[700],
-                            ),
-                          ),
-                        ],
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'El navegador solicitará permisos para acceder\na la cámara cuando el backend se conecte.',
-                        textAlign: TextAlign.center,
-                        style: TextStyle(color: Colors.blue[700], fontSize: 12),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
             ],
           ),
         ),
@@ -915,15 +899,18 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
     );
   }
 
-  // [Resto de los widgets permanecen iguales...]
   Widget _metricsCard({
     required String earText,
+    required String marText,
+    required String poseText,
+    required String fusedText,
     required int closedFrames,
     required bool isDrowsy,
     required double threshold,
     required int consecutiveFrames,
   }) {
     final theme = Theme.of(context);
+    final fusedVal = double.tryParse(fusedText) ?? 0;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -939,6 +926,18 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
             ),
             const SizedBox(height: 16),
             _metric('EAR actual', earText, icon: Icons.visibility),
+            _metric('MAR actual', marText, icon: Icons.mood),
+            _metric(
+              'Pose (yaw/pitch/roll)',
+              poseText,
+              icon: Icons.threed_rotation,
+            ),
+            _metric(
+              'Score de fusión',
+              fusedText,
+              isAlert: fusedVal >= _fusionThr,
+              icon: Icons.auto_graph,
+            ),
             _metric(
               'Frames con ojos cerrados',
               '$closedFrames',
@@ -953,14 +952,25 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
             ),
             const Divider(height: 24),
             _metric(
-              'Umbral EAR configurado',
+              'Umbral EAR',
               threshold.toStringAsFixed(3),
               icon: Icons.tune,
             ),
+            _metric('Umbral MAR', _marThr.toStringAsFixed(3), icon: Icons.tune),
             _metric(
-              'Frames consecutivos configurados',
-              '$consecutiveFrames',
-              icon: Icons.settings,
+              'Umbral Pitch (°)',
+              _pitchThr.toStringAsFixed(0),
+              icon: Icons.tune,
+            ),
+            _metric(
+              'Umbral Fusión',
+              _fusionThr.toStringAsFixed(2),
+              icon: Icons.merge_type,
+            ),
+            _metric(
+              'Pesos (EAR/MAR/Pose)',
+              '${_wEar.toStringAsFixed(2)}/${_wMar.toStringAsFixed(2)}/${_wPose.toStringAsFixed(2)}',
+              icon: Icons.scale,
             ),
           ],
         ),
@@ -1010,6 +1020,45 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                   .read(drowsyControllerProvider.notifier)
                   .setConfig(consecFrames: _frames.toInt()),
             ),
+            const SizedBox(height: 20),
+            _slider(
+              label: 'Umbral MAR (bostezo)',
+              value: _marThr,
+              min: 0.3,
+              max: 1.2,
+              step: 0.01,
+              onChanged: (v) => setState(() => _marThr = v),
+              onSubmit: () => ref
+                  .read(drowsyControllerProvider.notifier)
+                  .setConfig(marThreshold: _marThr),
+            ),
+            const SizedBox(height: 20),
+            _slider(
+              label: 'Umbral Pitch (°) (cabeceo)',
+              value: _pitchThr,
+              min: 5,
+              max: 45,
+              step: 1,
+              onChanged: (v) => setState(() => _pitchThr = v),
+              onSubmit: () => ref
+                  .read(drowsyControllerProvider.notifier)
+                  .setConfig(pitchDegThreshold: _pitchThr),
+            ),
+            const SizedBox(height: 20),
+            _slider(
+              label: 'Umbral de Fusión (0–1)',
+              value: _fusionThr,
+              min: 0.3,
+              max: 0.95,
+              step: 0.01,
+              onChanged: (v) => setState(() => _fusionThr = v),
+              onSubmit: () => ref
+                  .read(drowsyControllerProvider.notifier)
+                  .setConfig(fusionThreshold: _fusionThr),
+            ),
+            const SizedBox(height: 20),
+            _textWeightsInfo(),
+            _weightsSliders(),
             const SizedBox(height: 12),
             Container(
               padding: const EdgeInsets.all(12),
@@ -1024,7 +1073,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                   const SizedBox(width: 8),
                   Expanded(
                     child: Text(
-                      'Los cambios se aplican al presionar "Aplicar" y se envían al backend.',
+                      'Los cambios se aplican al presionar los botones "Aplicar".',
                       style: theme.textTheme.bodySmall?.copyWith(
                         color: Colors.blue[700],
                       ),
@@ -1036,6 +1085,82 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
           ],
         ),
       ),
+    );
+  }
+
+  Widget _textWeightsInfo() {
+    final sum = (_wEar + _wMar + _wPose);
+    final ok = (sum - 1.0).abs() < 0.02;
+    return Row(
+      children: [
+        const Icon(Icons.info_outline, size: 18),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Text(
+            'Pesos de fusión (deben sumar ~1.0). Suma actual: ${sum.toStringAsFixed(2)}',
+            style: TextStyle(
+              color: ok ? Colors.green[700] : Colors.orange[700],
+            ),
+          ),
+        ),
+        ElevatedButton.icon(
+          onPressed: () => setState(() {
+            final s = _wEar + _wMar + _wPose;
+            if (s > 0) {
+              _wEar /= s;
+              _wMar /= s;
+              _wPose /= s;
+            }
+          }),
+          icon: const Icon(Icons.balance),
+          label: const Text('Normalizar'),
+        ),
+        const SizedBox(width: 8),
+        ElevatedButton.icon(
+          onPressed: () => ref
+              .read(drowsyControllerProvider.notifier)
+              .setConfig(wEar: _wEar, wMar: _wMar, wPose: _wPose),
+          icon: const Icon(Icons.send),
+          label: const Text('Aplicar'),
+        ),
+      ],
+    );
+  }
+
+  Widget _weightsSliders() {
+    return Column(
+      children: [
+        const SizedBox(height: 8),
+        _slider(
+          label: 'Peso EAR',
+          value: _wEar,
+          min: 0,
+          max: 1,
+          step: 0.01,
+          onChanged: (v) => setState(() => _wEar = v),
+          onSubmit: () {}, // se aplica con el botón "Aplicar" de arriba
+        ),
+        const SizedBox(height: 10),
+        _slider(
+          label: 'Peso MAR',
+          value: _wMar,
+          min: 0,
+          max: 1,
+          step: 0.01,
+          onChanged: (v) => setState(() => _wMar = v),
+          onSubmit: () {},
+        ),
+        const SizedBox(height: 10),
+        _slider(
+          label: 'Peso Pose',
+          value: _wPose,
+          min: 0,
+          max: 1,
+          step: 0.01,
+          onChanged: (v) => setState(() => _wPose = v),
+          onSubmit: () {},
+        ),
+      ],
     );
   }
 

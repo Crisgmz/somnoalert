@@ -253,7 +253,6 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
           if (_playLocalAlarm && metrics.isDrowsy) {
             if (_player.state != PlayerState.playing) {
               if (kIsWeb && !_audioUnlocked) {
-                // Avisa a la UI que falta habilitar audio
                 ref.read(audioUnlockedProvider.notifier).set(false);
               } else {
                 await _player.setReleaseMode(ReleaseMode.loop);
@@ -307,6 +306,12 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
 
   Future<void> setConfig({
     double? earThreshold,
+    double? marThreshold,
+    double? pitchDegThreshold,
+    double? fusionThreshold,
+    double? wEar,
+    double? wMar,
+    double? wPose,
     int? consecFrames,
     String? frameOrientation, // 'none' | 'rotate180' | 'flip_h' | 'flip_v'
   }) async {
@@ -315,6 +320,15 @@ class DrowsyController extends AsyncNotifier<DrowsyMetrics?> {
       final uri = Uri.parse("$base/config");
       final body = <String, dynamic>{};
       if (earThreshold != null) body['EAR_THRESHOLD'] = earThreshold;
+      if (marThreshold != null) body['MAR_THRESHOLD'] = marThreshold;
+      if (pitchDegThreshold != null) {
+        body['PITCH_DEG_THRESHOLD'] = pitchDegThreshold;
+      }
+      if (fusionThreshold != null) body['FUSION_THRESHOLD'] = fusionThreshold;
+      if (wEar != null) body['W_EAR'] = wEar;
+      if (wMar != null) body['W_MAR'] = wMar;
+      if (wPose != null) body['W_POSE'] = wPose;
+
       if (consecFrames != null) body['CONSEC_FRAMES'] = consecFrames;
       if (frameOrientation != null) body['frameOrientation'] = frameOrientation;
 
