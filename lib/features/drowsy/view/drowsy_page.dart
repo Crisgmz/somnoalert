@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
@@ -6,6 +7,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import '../model.dart';
 import '../state/drowsy_controller.dart';
+import '../../../models/events.dart';
 
 class DrowsyPage extends ConsumerStatefulWidget {
   const DrowsyPage({super.key});
@@ -33,6 +35,27 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
   bool _wasAlerting = false;
   final List<_AlertLogEntry> _alertLog = [];
 
+  bool? _backendAlarmEnabled = false;
+  int _cameraIndex = 0;
+  int _frameWidth = 1280;
+  int _frameHeight = 720;
+  int _cameraFps = 30;
+  String _frameOrientation = 'none';
+  String? _cameraCodec;
+  List<List<int>> _resolutionOptions = const [
+    [640, 480],
+    [800, 600],
+    [1024, 768],
+    [1280, 720],
+    [1600, 900],
+    [1920, 1080],
+  ];
+  List<String> _codecOptions = const ['MJPG', 'YUY2', 'H264', 'XVID'];
+  List<int> _fpsOptions = const [60, 30, 24];
+
+  final List<_EventLogEntry> _eventsLog = [];
+  StreamSubscription<DrowsyEvent>? _eventsSub;
+
   // Runner log buffer (solo para desktop)
   final List<String> _runnerLogs = [];
   late final Stream<String> _runnerLogStream;
@@ -56,6 +79,17 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
         }
       });
     }
+
+    _eventsSub = ref.read(drowsyControllerProvider.notifier).events.listen((event) {
+      if (!mounted) return;
+      final entry = _EventLogEntry.fromEvent(event, _formatSeconds);
+      setState(() {
+        _eventsLog.insert(0, entry);
+        if (_eventsLog.length > 40) {
+          _eventsLog.removeLast();
+        }
+      });
+    });
 
     // Auto-conectar en web
     if (kIsWeb) {
@@ -103,6 +137,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
   @override
   void dispose() {
     _backendCtrl.dispose();
+    _eventsSub?.cancel();
     if (!kIsWeb) {
       WakelockPlus.disable();
     }
@@ -223,28 +258,47 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
   ) {
     next.whenData((metrics) {
       if (metrics == null) return;
-
-      // Actualizar sliders con lo que mande el backend (si viene)
-      _marThr = metrics.marThreshold ?? _marThr;
-      _pitchThr = metrics.pitchDegThreshold ?? _pitchThr;
-      _fusionThr = metrics.fusionThreshold ?? _fusionThr;
-      _wEar = metrics.wEar ?? _wEar;
-      _wMar = metrics.wMar ?? _wMar;
-      _wPose = metrics.wPose ?? _wPose;
-
       final isDrowsy = metrics.isDrowsy;
-      if (isDrowsy != _wasAlerting) {
-        if (!mounted) {
-          _wasAlerting = isDrowsy;
-          return;
+      final shouldLog = isDrowsy != _wasAlerting;
+      final earText = metrics.ear != null ? metrics.ear!.toStringAsFixed(3) : '--';
+      final backendAlarm = metrics.backendAlarmEnabled;
+      final video = metrics.videoConfig;
+
+      if (!mounted) {
+        _wasAlerting = isDrowsy;
+        return;
+      }
+
+      setState(() {
+        if (backendAlarm != null) {
+          _backendAlarmEnabled = backendAlarm;
         }
-        final earText = metrics.ear != null
-            ? metrics.ear!.toStringAsFixed(3)
-            : '--';
-        final message = isDrowsy
-            ? 'Somnolencia detectada (EAR: $earText)'
-            : 'Alerta despejada';
-        setState(() {
+
+        if (video != null) {
+          _cameraIndex = video.requestedIndex ?? video.activeIndex ?? _cameraIndex;
+          _frameWidth = video.requestedWidth ?? video.activeWidth ?? _frameWidth;
+          _frameHeight = video.requestedHeight ?? video.activeHeight ?? _frameHeight;
+          _cameraFps = video.requestedFps ?? video.activeFps ?? _cameraFps;
+          _cameraCodec = video.requestedCodec ?? video.activeCodec ?? _cameraCodec;
+          _frameOrientation = video.requestedOrientation ?? video.activeOrientation ?? _frameOrientation;
+
+          if (video.codecOptions.isNotEmpty) {
+            _codecOptions = List<String>.from(video.codecOptions);
+          }
+          if (video.resolutionOptions.isNotEmpty) {
+            _resolutionOptions = video.resolutionOptions
+                .map((pair) => [pair[0], pair.length > 1 ? pair[1] : pair[0]])
+                .toList();
+          }
+          if (video.fpsOptions.isNotEmpty) {
+            _fpsOptions = List<int>.from(video.fpsOptions);
+          }
+        }
+
+        if (shouldLog) {
+          final message = isDrowsy
+              ? 'Somnolencia detectada (EAR: $earText)'
+              : 'Alerta despejada';
           _alertLog.insert(
             0,
             _AlertLogEntry(
@@ -254,11 +308,10 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
             ),
           );
           if (_alertLog.length > 20) _alertLog.removeLast();
-          _wasAlerting = isDrowsy;
-        });
-      } else {
+        }
+
         _wasAlerting = isDrowsy;
-      }
+      });
     });
   }
 
@@ -614,7 +667,13 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
           consecutiveFrames: currentFrames,
         ),
         const SizedBox(height: 16),
+        _videoSettingsCard(metrics),
+        const SizedBox(height: 16),
         _configurationCard(),
+        if (_eventsLog.isNotEmpty) ...[
+          const SizedBox(height: 16),
+          _eventsCard(),
+        ],
         if (_alertLog.isNotEmpty) ...[
           const SizedBox(height: 16),
           _alertsTimeline(),
@@ -997,6 +1056,19 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
               ],
             ),
             const SizedBox(height: 16),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('Alarma en backend (Python)'),
+              subtitle: const Text('Permite que el servidor active la alarma incluso sin audio local'),
+              value: _backendAlarmEnabled ?? false,
+              onChanged: (value) {
+                setState(() => _backendAlarmEnabled = value);
+                ref
+                    .read(drowsyControllerProvider.notifier)
+                    .setConfig(usePythonAlarm: value);
+              },
+            ),
+            const Divider(height: 24),
             _slider(
               label: 'Umbral EAR',
               value: _threshold,
@@ -1127,6 +1199,265 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
     );
   }
 
+  Widget _videoSettingsCard(DrowsyMetrics? metrics) {
+    final theme = Theme.of(context);
+    final video = metrics?.videoConfig;
+    final activeSummary = video != null
+        ? 'Actual: Cam ${video.activeIndex ?? '-'} · ${_formatResolution(video.activeWidth, video.activeHeight)} @ ${video.activeFps ?? '-'} fps · ${video.activeCodec ?? 'AUTO'}'
+        : 'Esperando datos desde el backend...';
+    final requestedCodecLabel = (_cameraCodec ?? 'AUTO').toUpperCase();
+    final requestedSummary =
+        'Solicitado: Cam $_cameraIndex · ${_formatResolution(_frameWidth, _frameHeight)} @ $_cameraFps fps · $requestedCodecLabel';
+
+    final orientationLabels = <String, String>{
+      'none': 'Sin ajuste',
+      'flip_h': 'Espejo horizontal',
+      'flip_v': 'Espejo vertical',
+      'rotate180': 'Rotar 180°',
+    };
+
+    final indexSet = <int>{_cameraIndex};
+    if (video?.activeIndex != null) indexSet.add(video!.activeIndex!);
+    if (video?.requestedIndex != null) indexSet.add(video!.requestedIndex!);
+    final indexOptions = indexSet.toList()..sort();
+
+    final resolutionSet = <String>{};
+    for (final pair in _resolutionOptions) {
+      if (pair.length >= 2) {
+        resolutionSet.add('${pair[0]}x${pair[1]}');
+      }
+    }
+    final currentResolution = '${_frameWidth}x$_frameHeight';
+    resolutionSet.add(currentResolution);
+    if (video?.activeWidth != null && video?.activeHeight != null) {
+      resolutionSet.add('${video!.activeWidth}x${video.activeHeight}');
+    }
+    if (video?.requestedWidth != null && video?.requestedHeight != null) {
+      resolutionSet.add('${video!.requestedWidth}x${video.requestedHeight}');
+    }
+    final resolutionItems = resolutionSet
+        .map((label) => DropdownMenuItem<String>(value: label, child: Text(label)))
+        .toList()
+      ..sort((a, b) => a.value!.compareTo(b.value!));
+
+    final fpsSet = <int>{_cameraFps, ..._fpsOptions};
+    if (video?.activeFps != null) fpsSet.add(video!.activeFps!);
+    if (video?.requestedFps != null) fpsSet.add(video!.requestedFps!);
+    final fpsItems = fpsSet.toList()..sort();
+
+    final codecSet = <String>{'AUTO'};
+    codecSet.addAll(_codecOptions.map((e) => e.toUpperCase()));
+    if (video?.activeCodec != null && video!.activeCodec!.isNotEmpty) {
+      codecSet.add(video.activeCodec!.toUpperCase());
+    }
+    if (video?.requestedCodec != null && video!.requestedCodec!.isNotEmpty) {
+      codecSet.add(video.requestedCodec!.toUpperCase());
+    }
+    final codecItems = codecSet.toList()..sort();
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.videocam, color: theme.primaryColor),
+                const SizedBox(width: 8),
+                Text(
+                  'Video y Cámara',
+                  style: theme.textTheme.titleMedium,
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(activeSummary, style: theme.textTheme.bodyMedium),
+            const SizedBox(height: 4),
+            Text(requestedSummary, style: theme.textTheme.bodySmall),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: [
+                SizedBox(
+                  width: 180,
+                  child: DropdownButtonFormField<int>(
+                    value: _cameraIndex,
+                    decoration: const InputDecoration(
+                      labelText: 'Cámara',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: indexOptions
+                        .map((value) => DropdownMenuItem<int>(
+                              value: value,
+                              child: Text('Cam $value'),
+                            ))
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _cameraIndex = value);
+                      }
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 200,
+                  child: DropdownButtonFormField<String>(
+                    value: currentResolution,
+                    decoration: const InputDecoration(
+                      labelText: 'Resolución deseada',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: resolutionItems,
+                    onChanged: (value) {
+                      if (value == null) return;
+                      final parts = value.split('x');
+                      if (parts.length == 2) {
+                        final w = int.tryParse(parts[0]);
+                        final h = int.tryParse(parts[1]);
+                        if (w != null && h != null) {
+                          setState(() {
+                            _frameWidth = w;
+                            _frameHeight = h;
+                          });
+                        }
+                      }
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 160,
+                  child: DropdownButtonFormField<int>(
+                    value: _cameraFps,
+                    decoration: const InputDecoration(
+                      labelText: 'FPS deseados',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: fpsItems
+                        .map((fps) => DropdownMenuItem<int>(
+                              value: fps,
+                              child: Text('$fps fps'),
+                            ))
+                        .toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _cameraFps = value);
+                      }
+                    },
+                  ),
+                ),
+                SizedBox(
+                  width: 200,
+                  child: DropdownButtonFormField<String>(
+                    value: requestedCodecLabel,
+                    decoration: const InputDecoration(
+                      labelText: 'Codec preferido',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: codecItems
+                        .map((codec) => DropdownMenuItem<String>(
+                              value: codec,
+                              child: Text(codec),
+                            ))
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setState(() {
+                        _cameraCodec = value == 'AUTO' ? null : value;
+                      });
+                    },
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            DropdownButtonFormField<String>(
+              value: _frameOrientation,
+              decoration: const InputDecoration(
+                labelText: 'Orientación del frame',
+                border: OutlineInputBorder(),
+              ),
+              items: orientationLabels.entries
+                  .map((e) => DropdownMenuItem<String>(
+                        value: e.key,
+                        child: Text(e.value),
+                      ))
+                  .toList(),
+              onChanged: (value) {
+                if (value != null) {
+                  setState(() => _frameOrientation = value);
+                }
+              },
+            ),
+            const SizedBox(height: 16),
+            Align(
+              alignment: Alignment.centerRight,
+              child: FilledButton.icon(
+                onPressed: _applyVideoConfig,
+                icon: const Icon(Icons.videocam_outlined),
+                label: const Text('Aplicar configuración de video'),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _applyVideoConfig() async {
+    final notifier = ref.read(drowsyControllerProvider.notifier);
+    final codec = (_cameraCodec == null || _cameraCodec!.toUpperCase() == 'AUTO')
+        ? null
+        : _cameraCodec!.toUpperCase();
+    try {
+      await notifier.setConfig(
+        cameraIndex: _cameraIndex,
+        frameWidth: _frameWidth,
+        frameHeight: _frameHeight,
+        cameraFps: _cameraFps,
+        cameraCodec: codec,
+        frameOrientation: _frameOrientation,
+        usePythonAlarm: _backendAlarmEnabled,
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Configuración de video enviada al backend'),
+          duration: Duration(seconds: 2),
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('No se pudo actualizar la cámara: $e'),
+          backgroundColor: Colors.redAccent,
+        ),
+      );
+    }
+  }
+
+  String _formatResolution(int? width, int? height) {
+    if (width == null || height == null) return '--';
+    return '${width}x$height';
+  }
+
+  String _formatSeconds(double seconds) {
+    if (seconds >= 60) {
+      final minutes = seconds ~/ 60;
+      final rem = seconds % 60;
+      if (rem < 0.5) {
+        return '${minutes}m';
+      }
+      return '${minutes}m ${rem.toStringAsFixed(rem >= 10 ? 0 : 1)}s';
+    }
+    if (seconds >= 1) {
+      return '${seconds.toStringAsFixed(seconds >= 10 ? 0 : 1)} s';
+    }
+    return '${(seconds * 1000).round()} ms';
+  }
+
   Widget _weightsSliders() {
     return Column(
       children: [
@@ -1161,6 +1492,107 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
           onSubmit: () {},
         ),
       ],
+    );
+  }
+
+  Widget _eventsCard() {
+    final theme = Theme.of(context);
+    final entries = _eventsLog.take(8).toList();
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.timeline, color: theme.primaryColor),
+                const SizedBox(width: 8),
+                Text(
+                  'Eventos en tiempo real',
+                  style: theme.textTheme.titleMedium,
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            if (entries.isEmpty)
+              Container(
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  color: Colors.grey[50],
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.grey[600]),
+                    const SizedBox(width: 8),
+                    Text(
+                      'Aún no se registran eventos recientes.',
+                      style: theme.textTheme.bodyMedium?.copyWith(
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            for (var i = 0; i < entries.length; i++) ...[
+              if (i > 0) const Divider(height: 20),
+              _eventTile(entries[i], theme),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _eventTile(_EventLogEntry entry, ThemeData theme) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            width: 10,
+            height: 10,
+            decoration: BoxDecoration(color: entry.color, shape: BoxShape.circle),
+          ),
+          const SizedBox(width: 12),
+          Icon(entry.icon, color: entry.color, size: 22),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  entry.title,
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+                if (entry.subtitle != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      entry.subtitle!,
+                      style: theme.textTheme.bodySmall?.copyWith(
+                        color: theme.colorScheme.onSurfaceVariant,
+                      ),
+                    ),
+                  ),
+                Padding(
+                  padding: const EdgeInsets.only(top: 4),
+                  child: Text(
+                    _formatTime(entry.timestamp),
+                    style: theme.textTheme.bodySmall?.copyWith(
+                      color: theme.colorScheme.onSurfaceVariant,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1438,4 +1870,94 @@ class _AlertLogEntry {
   final DateTime timestamp;
   final String message;
   final bool isAlert;
+}
+
+class _EventLogEntry {
+  const _EventLogEntry({
+    required this.timestamp,
+    required this.title,
+    this.subtitle,
+    required this.icon,
+    required this.color,
+  });
+
+  factory _EventLogEntry.fromEvent(
+    DrowsyEvent event,
+    String Function(double seconds) formatSeconds,
+  ) {
+    if (event is EyeBlink) {
+      return _EventLogEntry(
+        timestamp: event.ts,
+        title: 'Parpadeo detectado',
+        subtitle: 'Seguimiento ocular actualizado',
+        icon: Icons.remove_red_eye_outlined,
+        color: Colors.blueAccent,
+      );
+    }
+    if (event is MicroSleep) {
+      return _EventLogEntry(
+        timestamp: event.ts,
+        title: 'Micro-sueño detectado',
+        subtitle: 'Duración ${formatSeconds(event.duration)}',
+        icon: Icons.hotel,
+        color: Colors.redAccent,
+      );
+    }
+    if (event is YawnEvent) {
+      return _EventLogEntry(
+        timestamp: event.ts,
+        title: 'Bostezo detectado',
+        subtitle: 'Duración ${formatSeconds(event.duration)}',
+        icon: Icons.mood_bad,
+        color: Colors.orangeAccent,
+      );
+    }
+    if (event is PitchDown) {
+      return _EventLogEntry(
+        timestamp: event.ts,
+        title: 'Cabeceo detectado',
+        subtitle: 'Duración ${formatSeconds(event.duration)}',
+        icon: Icons.airline_seat_flat,
+        color: Colors.deepPurpleAccent,
+      );
+    }
+    if (event is EyeRub) {
+      final hand = event.hand.isEmpty ? 'ambas manos' : event.hand;
+      return _EventLogEntry(
+        timestamp: event.ts,
+        title: 'Frotado de ojos',
+        subtitle: '${hand[0].toUpperCase()}${hand.substring(1)} · ${formatSeconds(event.duration)}',
+        icon: Icons.pan_tool_outlined,
+        color: Colors.teal,
+      );
+    }
+    if (event is ReportWindow) {
+      final counts = event.counts;
+      final summary = [
+        'Parpadeos: ${counts['eye_blink'] ?? 0}',
+        'Bostezos: ${counts['yawn'] ?? 0}',
+        'Microsueños: ${counts['micro_sleep'] ?? 0}',
+      ].join(' · ');
+      return _EventLogEntry(
+        timestamp: event.ts,
+        title: 'Resumen de ${event.windowS}s',
+        subtitle: summary,
+        icon: Icons.summarize,
+        color: Colors.indigo,
+      );
+    }
+    return _EventLogEntry(
+      timestamp: event.ts,
+      title: 'Evento ${event.runtimeType}',
+      subtitle: null,
+      icon: Icons.bubble_chart,
+      color: Colors.grey,
+    );
+  }
+
+  final DateTime timestamp;
+  final String title;
+  final String? subtitle;
+  final IconData icon;
+  final Color color;
 }
