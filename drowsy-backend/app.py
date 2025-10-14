@@ -165,10 +165,10 @@ def clamp01(x):
 def frame_to_base64(frame):
     try:
         h, w = frame.shape[:2]
-        if w > 1080:
-            scale = 1080 / w
+        if w > 1280:
+            scale = 1280 / w
             frame = cv2.resize(frame, (int(w*scale), int(h*scale)))
-        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        _, buffer = cv2.imencode('.jpg', frame, [cv2.IMWRITE_JPEG_QUALITY, 85])
         return base64.b64encode(buffer).decode('utf-8')
     except Exception as e:
         print(f"Error converting frame to base64: {e}")
@@ -231,7 +231,7 @@ def get_config():
 @app.post("/config")
 async def set_config(cfg: dict):
     global EAR_THRESHOLD, MAR_THRESHOLD, PITCH_DEG_THRESHOLD, CONSEC_FRAMES
-    global W_EAR, W_MAR, W_POSE, FUSION_THRESHOLD
+    global W_EAR, W_MAR, W_POSE, FUSION_THRESHOLD, USE_PYTHON_ALARM
     print(f"Nueva configuración: {cfg}")
     EAR_THRESHOLD = float(cfg.get("EAR_THRESHOLD", cfg.get("earThreshold", EAR_THRESHOLD)))
     MAR_THRESHOLD = float(cfg.get("MAR_THRESHOLD", MAR_THRESHOLD))
@@ -241,6 +241,16 @@ async def set_config(cfg: dict):
     W_MAR = float(cfg.get("W_MAR", W_MAR))
     W_POSE = float(cfg.get("W_POSE", W_POSE))
     FUSION_THRESHOLD = float(cfg.get("FUSION_THRESHOLD", FUSION_THRESHOLD))
+    USE_PYTHON_ALARM = bool(cfg.get("USE_PYTHON_ALARM", USE_PYTHON_ALARM))
+    if USE_PYTHON_ALARM and not pygame.mixer.get_init():
+        try:
+            pygame.mixer.init()
+            pygame.mixer.music.load("alarma.mp3")
+        except Exception as exc:
+            print("No se pudo inicializar alarma tras cambio de config:", exc)
+            USE_PYTHON_ALARM = False
+    elif not USE_PYTHON_ALARM and pygame.mixer.get_init():
+        pygame.mixer.music.stop()
     return {"ok": True, **get_config()}
 
 # =====================
@@ -317,9 +327,22 @@ async def camera_loop():
             print("❌ No se pudo abrir ninguna cámara")
             return
 
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-    cap.set(cv2.CAP_PROP_FPS, 60)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+    candidates = [(1920, 1080), (1280, 720), (1024, 768), (800, 600), (640, 480)]
+    selected = None
+    for (W, H) in candidates:
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
+        ok, test_frame = cap.read()
+        if ok:
+            h, w = test_frame.shape[:2]
+            if abs(w - W) <= 16 and abs(h - H) <= 16:
+                selected = (w, h)
+                print(f"✅ Resolución seleccionada: {w}x{h}")
+                break
+    if selected is None:
+        print("⚠️ No se pudo fijar una resolución alta, usando valores por defecto")
+    cap.set(cv2.CAP_PROP_FPS, 30)
     print("✅ Cámara configurada")
 
     frame_count = 0
