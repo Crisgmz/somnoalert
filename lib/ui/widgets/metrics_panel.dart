@@ -8,7 +8,11 @@ import '../../state/metrics_provider.dart';
 class MetricsPanel extends ConsumerWidget {
   const MetricsPanel({super.key});
 
-  Color _colorForValue(double? value, double threshold, {bool inverse = false}) {
+  Color _colorForValue(
+    double? value,
+    double threshold, {
+    bool inverse = false,
+  }) {
     if (value == null) return Colors.grey;
     if (inverse) {
       if (value >= threshold) return Colors.redAccent;
@@ -37,74 +41,90 @@ class MetricsPanel extends ConsumerWidget {
           Text(
             'Panel de métricas',
             style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                  color: Colors.white,
-                  fontWeight: FontWeight.bold,
-                ),
+              color: Colors.white,
+              fontWeight: FontWeight.bold,
+            ),
           ),
           const SizedBox(height: 16),
           if (metrics == null)
             Text(
               'Esperando datos del detector...',
-              style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white54),
+              style: Theme.of(
+                context,
+              ).textTheme.bodyMedium?.copyWith(color: Colors.white54),
             )
           else ...[
             _StageSummary(metrics: metrics),
             const SizedBox(height: 16),
-            Builder(builder: (context) {
-              final drowsy = metrics.thresholds.tier('drowsy');
-              return Wrap(
-                spacing: 12,
-                runSpacing: 12,
-                children: [
-                  _MetricTile(
-                    label: 'EAR',
-                    value: metrics.ear,
-                    threshold: drowsy.ear,
-                    color: _colorForValue(metrics.ear, drowsy.ear),
-                  ),
-                  _MetricTile(
-                    label: 'MAR',
-                    value: metrics.mar,
-                    threshold: drowsy.mar,
-                    color: _colorForValue(metrics.mar, drowsy.mar, inverse: true),
-                  ),
-                  _MetricTile(
-                    label: 'Pitch',
-                    value: metrics.pitch,
-                    threshold: drowsy.pitch,
-                    color: _colorForValue(metrics.pitch, drowsy.pitch, inverse: true),
-                    suffix: '°',
-                  ),
-                  _MetricTile(
-                    label: 'Fusión',
-                    value: metrics.fusedScore,
-                    threshold: drowsy.fusion,
-                    color: _colorForValue(metrics.fusedScore, drowsy.fusion, inverse: true),
-                  ),
-                  _MetricTile(
-                    label: 'Frames cerrados',
-                    value: metrics.closedFrames.toDouble(),
-                    threshold: drowsy.consecFrames.toDouble(),
-                    color: Colors.blueAccent,
-                    decimals: 0,
-                  ),
-                  _MetricTile(
-                    label: 'Yaw',
-                    value: metrics.yaw,
-                    threshold: 0,
-                    color: Colors.blueGrey,
-                    suffix: '°',
-                  ),
-                  _MetricTile(
-                    label: 'Roll',
-                    value: metrics.roll,
-                    threshold: 0,
-                    color: Colors.blueGrey,
-                    suffix: '°',
-                  ),
-                ],
-              );
-            }),
+            Builder(
+              builder: (context) {
+                final drowsy = metrics.thresholds.tier('drowsy');
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: [
+                    _MetricTile(
+                      label: 'EAR',
+                      value: metrics.ear,
+                      threshold: drowsy.ear,
+                      color: _colorForValue(metrics.ear, drowsy.ear),
+                    ),
+                    _MetricTile(
+                      label: 'MAR',
+                      value: metrics.mar,
+                      threshold: drowsy.mar,
+                      color: _colorForValue(
+                        metrics.mar,
+                        drowsy.mar,
+                        inverse: true,
+                      ),
+                    ),
+                    _MetricTile(
+                      label: 'Pitch',
+                      value: metrics.pitch,
+                      threshold: drowsy.pitch,
+                      color: _colorForValue(
+                        metrics.pitch,
+                        drowsy.pitch,
+                        inverse: true,
+                      ),
+                      suffix: '°',
+                    ),
+                    _MetricTile(
+                      label: 'Fusión',
+                      value: metrics.fusedScore,
+                      threshold: drowsy.fusion,
+                      color: _colorForValue(
+                        metrics.fusedScore,
+                        drowsy.fusion,
+                        inverse: true,
+                      ),
+                    ),
+                    _MetricTile(
+                      label: 'Frames cerrados',
+                      value: metrics.closedFrames.toDouble(),
+                      threshold: drowsy.consecFrames.toDouble(),
+                      color: Colors.blueAccent,
+                      decimals: 0,
+                    ),
+                    _MetricTile(
+                      label: 'Yaw',
+                      value: metrics.yaw,
+                      threshold: 0,
+                      color: Colors.blueGrey,
+                      suffix: '°',
+                    ),
+                    _MetricTile(
+                      label: 'Roll',
+                      value: metrics.roll,
+                      threshold: 0,
+                      color: Colors.blueGrey,
+                      suffix: '°',
+                    ),
+                  ],
+                );
+              },
+            ),
             const SizedBox(height: 16),
             _ThresholdsCard(thresholds: metrics.thresholds),
           ],
@@ -113,12 +133,14 @@ class MetricsPanel extends ConsumerWidget {
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Expanded(
-                  child: _WeightsCard(weights: metrics.weights),
-                ),
+                Expanded(child: _WeightsCard(weights: metrics.weights)),
                 const SizedBox(width: 12),
                 Expanded(
-                  child: _ReasonsCard(reasons: metrics.stageReasons.isNotEmpty ? metrics.stageReasons : metrics.reason),
+                  child: _ReasonsCard(
+                    reasons: metrics.stageReasons.isNotEmpty
+                        ? metrics.stageReasons
+                        : metrics.reason,
+                  ),
                 ),
               ],
             ),
@@ -149,7 +171,9 @@ class _MetricTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
     final formatted = value == null ? '--' : value!.toStringAsFixed(decimals);
-    final thresholdText = threshold == 0 ? '' : 'Umbral ${threshold.toStringAsFixed(2)}';
+    final thresholdText = threshold == 0
+        ? ''
+        : 'Umbral ${threshold.toStringAsFixed(2)}';
 
     return Container(
       width: 150,
@@ -172,12 +196,18 @@ class _MetricTile extends StatelessWidget {
             children: [
               Text(
                 formatted,
-                style: theme.textTheme.headlineSmall?.copyWith(color: color, fontWeight: FontWeight.bold),
+                style: theme.textTheme.headlineSmall?.copyWith(
+                  color: color,
+                  fontWeight: FontWeight.bold,
+                ),
               ),
               if (suffix != null)
                 Padding(
                   padding: const EdgeInsets.only(left: 4, bottom: 2),
-                  child: Text(suffix!, style: theme.textTheme.labelLarge?.copyWith(color: color)),
+                  child: Text(
+                    suffix!,
+                    style: theme.textTheme.labelLarge?.copyWith(color: color),
+                  ),
                 ),
             ],
           ),
@@ -186,7 +216,9 @@ class _MetricTile extends StatelessWidget {
               padding: const EdgeInsets.only(top: 4),
               child: Text(
                 thresholdText,
-                style: theme.textTheme.bodySmall?.copyWith(color: Colors.white38),
+                style: theme.textTheme.bodySmall?.copyWith(
+                  color: Colors.white38,
+                ),
               ),
             ),
         ],
@@ -200,7 +232,8 @@ class _StageSummary extends StatelessWidget {
 
   final MetricsPayload metrics;
 
-  String get _stage => metrics.drowsinessLevel ?? (metrics.isDrowsy ? 'drowsy' : 'normal');
+  String get _stage =>
+      metrics.drowsinessLevel ?? (metrics.isDrowsy ? 'drowsy' : 'normal');
 
   Color get _color {
     switch (_stage) {
@@ -235,7 +268,8 @@ class _StageSummary extends StatelessWidget {
     }
   }
 
-  List<String> get _reasons => metrics.stageReasons.isNotEmpty ? metrics.stageReasons : metrics.reason;
+  List<String> get _reasons =>
+      metrics.stageReasons.isNotEmpty ? metrics.stageReasons : metrics.reason;
 
   @override
   Widget build(BuildContext context) {
@@ -258,13 +292,18 @@ class _StageSummary extends StatelessWidget {
               Expanded(
                 child: Text(
                   _label,
-                  style: theme.textTheme.titleMedium?.copyWith(color: _color, fontWeight: FontWeight.bold),
+                  style: theme.textTheme.titleMedium?.copyWith(
+                    color: _color,
+                    fontWeight: FontWeight.bold,
+                  ),
                 ),
               ),
               if (metrics.fusedScore != null)
                 Text(
                   'Fusión ${metrics.fusedScore!.toStringAsFixed(2)}',
-                  style: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+                  style: theme.textTheme.bodySmall?.copyWith(
+                    color: Colors.white70,
+                  ),
                 ),
             ],
           ),
@@ -277,7 +316,9 @@ class _StageSummary extends StatelessWidget {
                   .map(
                     (reason) => Chip(
                       backgroundColor: Colors.white12,
-                      labelStyle: theme.textTheme.bodySmall?.copyWith(color: Colors.white70),
+                      labelStyle: theme.textTheme.bodySmall?.copyWith(
+                        color: Colors.white70,
+                      ),
                       label: Text(reason),
                     ),
                   )
@@ -321,12 +362,19 @@ class _ThresholdsCard extends StatelessWidget {
         children: [
           Text(
             'Umbrales por nivel',
-            style: theme.textTheme.titleSmall?.copyWith(color: Colors.white70, fontWeight: FontWeight.w600),
+            style: theme.textTheme.titleSmall?.copyWith(
+              color: Colors.white70,
+              fontWeight: FontWeight.w600,
+            ),
           ),
           const SizedBox(height: 12),
           for (final tierKey in thresholds.order) ...[
-            _ThresholdTierRow(label: _labelFor(tierKey), tier: thresholds.tier(tierKey)),
-            if (tierKey != thresholds.order.last) const Divider(color: Colors.white10, height: 20),
+            _ThresholdTierRow(
+              label: _labelFor(tierKey),
+              tier: thresholds.tier(tierKey),
+            ),
+            if (tierKey != thresholds.order.last)
+              const Divider(color: Colors.white10, height: 20),
           ],
         ],
       ),
@@ -348,7 +396,10 @@ class _ThresholdTierRow extends StatelessWidget {
       children: [
         Text(
           label,
-          style: theme.textTheme.bodyLarge?.copyWith(color: Colors.white, fontWeight: FontWeight.w600),
+          style: theme.textTheme.bodyLarge?.copyWith(
+            color: Colors.white,
+            fontWeight: FontWeight.w600,
+          ),
         ),
         const SizedBox(height: 6),
         Wrap(
@@ -357,8 +408,14 @@ class _ThresholdTierRow extends StatelessWidget {
           children: [
             _ThresholdChip(label: 'EAR ≤', value: tier.ear.toStringAsFixed(2)),
             _ThresholdChip(label: 'MAR ≥', value: tier.mar.toStringAsFixed(2)),
-            _ThresholdChip(label: '|Pitch| ≥', value: '${tier.pitch.toStringAsFixed(1)}°'),
-            _ThresholdChip(label: 'Fusión ≥', value: tier.fusion.toStringAsFixed(2)),
+            _ThresholdChip(
+              label: '|Pitch| ≥',
+              value: '${tier.pitch.toStringAsFixed(1)}°',
+            ),
+            _ThresholdChip(
+              label: 'Fusión ≥',
+              value: tier.fusion.toStringAsFixed(2),
+            ),
             _ThresholdChip(label: 'Frames ≥', value: '${tier.consecFrames}'),
           ],
         ),
@@ -384,9 +441,17 @@ class _ThresholdChip extends StatelessWidget {
       ),
       child: RichText(
         text: TextSpan(
-          style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white70),
+          style: Theme.of(
+            context,
+          ).textTheme.bodySmall?.copyWith(color: Colors.white70),
           children: [
-            TextSpan(text: '$label ', style: const TextStyle(fontWeight: FontWeight.w600, color: Colors.white)),
+            TextSpan(
+              text: '$label ',
+              style: const TextStyle(
+                fontWeight: FontWeight.w600,
+                color: Colors.white,
+              ),
+            ),
             TextSpan(text: value),
           ],
         ),
@@ -414,7 +479,9 @@ class _WeightsCard extends StatelessWidget {
         children: [
           Text(
             'Pesos',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white70),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(color: Colors.white70),
           ),
           const SizedBox(height: 8),
           ...weights.entries.map(
@@ -425,12 +492,16 @@ class _WeightsCard extends StatelessWidget {
                   Expanded(
                     child: Text(
                       entry.key.toUpperCase(),
-                      style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white54),
+                      style: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.white54),
                     ),
                   ),
                   Text(
                     (entry.value as num?)?.toStringAsFixed(2) ?? '--',
-                    style: Theme.of(context).textTheme.bodyMedium?.copyWith(color: Colors.white),
+                    style: Theme.of(
+                      context,
+                    ).textTheme.bodyMedium?.copyWith(color: Colors.white),
                   ),
                 ],
               ),
@@ -461,13 +532,17 @@ class _ReasonsCard extends StatelessWidget {
         children: [
           Text(
             'Razones',
-            style: Theme.of(context).textTheme.titleSmall?.copyWith(color: Colors.white70),
+            style: Theme.of(
+              context,
+            ).textTheme.titleSmall?.copyWith(color: Colors.white70),
           ),
           const SizedBox(height: 8),
           if (reasons.isEmpty)
             Text(
               'Sin alertas activas',
-              style: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.white38),
+              style: Theme.of(
+                context,
+              ).textTheme.bodySmall?.copyWith(color: Colors.white38),
             )
           else
             Wrap(
@@ -478,7 +553,9 @@ class _ReasonsCard extends StatelessWidget {
                     (reason) => Chip(
                       label: Text(reason),
                       backgroundColor: Colors.redAccent.withOpacity(0.15),
-                      labelStyle: Theme.of(context).textTheme.bodySmall?.copyWith(color: Colors.redAccent),
+                      labelStyle: Theme.of(
+                        context,
+                      ).textTheme.bodySmall?.copyWith(color: Colors.redAccent),
                     ),
                   )
                   .toList(),

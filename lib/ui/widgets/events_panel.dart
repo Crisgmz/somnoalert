@@ -46,7 +46,7 @@ class EventsPanel extends ConsumerWidget {
             color: Colors.redAccent,
             events: state.microSleeps,
             subtitleBuilder: (event) =>
-                'Duración: ${event?.duration?.toStringAsFixed(1) ?? "0.0"} s',
+                'Duración: ${event.duration.toStringAsFixed(1) ?? "0.0"} s',
           ),
           const SizedBox(height: 12),
           _EventList(
@@ -55,7 +55,7 @@ class EventsPanel extends ConsumerWidget {
             color: Colors.orangeAccent,
             events: state.pitchDowns,
             subtitleBuilder: (event) =>
-                'Duración: ${event?.duration?.toStringAsFixed(1) ?? "0.0"} s',
+                'Duración: ${event.duration.toStringAsFixed(1) ?? "0.0"} s',
           ),
           const SizedBox(height: 12),
           _EventList(
@@ -64,7 +64,7 @@ class EventsPanel extends ConsumerWidget {
             color: Colors.deepPurpleAccent,
             events: state.yawns,
             subtitleBuilder: (event) =>
-                'Duración: ${event?.duration?.toStringAsFixed(1) ?? "0.0"} s',
+                'Duración: ${event.duration.toStringAsFixed(1) ?? "0.0"} s',
           ),
           const SizedBox(height: 12),
           _EyeRubList(events: state.eyeRubs ?? []),

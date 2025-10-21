@@ -18,13 +18,13 @@ class CameraStateSnapshot {
   final String? orientation;
 
   factory CameraStateSnapshot.fromJson(Map<String, dynamic> json) {
-    int? _asInt(dynamic value) => (value as num?)?.toInt();
+    int? asInt(dynamic value) => (value as num?)?.toInt();
 
     return CameraStateSnapshot(
-      index: _asInt(json['index']),
-      width: _asInt(json['width']),
-      height: _asInt(json['height']),
-      fps: _asInt(json['fps']),
+      index: asInt(json['index']),
+      width: asInt(json['width']),
+      height: asInt(json['height']),
+      fps: asInt(json['fps']),
       codec: json['codec'] as String?,
       orientation: json['orientation'] as String?,
     );

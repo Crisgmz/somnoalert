@@ -67,7 +67,7 @@ class ConfigNotifier extends Notifier<ConfigState> {
     ConfigModel updated = (state.config ?? ConfigModel.defaults()).copy();
     bool changed = state.config == null;
 
-    double? _asDouble(dynamic value) => (value as num?)?.toDouble();
+    double? asDouble(dynamic value) => (value as num?)?.toDouble();
 
     final ear = thresholds.tier('drowsy').ear;
     if (ear != updated.earThr) {
@@ -98,19 +98,19 @@ class ConfigNotifier extends Notifier<ConfigState> {
       changed = true;
     }
 
-    final wEar = _asDouble(weights['ear']);
+    final wEar = asDouble(weights['ear']);
     if (wEar != null && wEar != updated.wEar) {
       updated.wEar = wEar;
       changed = true;
     }
 
-    final wMar = _asDouble(weights['mar']);
+    final wMar = asDouble(weights['mar']);
     if (wMar != null && wMar != updated.wMar) {
       updated.wMar = wMar;
       changed = true;
     }
 
-    final wPose = _asDouble(weights['pose']);
+    final wPose = asDouble(weights['pose']);
     if (wPose != null && wPose != updated.wPose) {
       updated.wPose = wPose;
       changed = true;

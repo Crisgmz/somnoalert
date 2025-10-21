@@ -1297,7 +1297,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                 SizedBox(
                   width: 180,
                   child: DropdownButtonFormField<int>(
-                    value: _cameraIndex,
+                    initialValue: _cameraIndex,
                     decoration: const InputDecoration(
                       labelText: 'Cámara',
                       border: OutlineInputBorder(),
@@ -1320,7 +1320,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                 SizedBox(
                   width: 200,
                   child: DropdownButtonFormField<String>(
-                    value: currentResolution,
+                    initialValue: currentResolution,
                     decoration: const InputDecoration(
                       labelText: 'Resolución deseada',
                       border: OutlineInputBorder(),
@@ -1345,7 +1345,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                 SizedBox(
                   width: 160,
                   child: DropdownButtonFormField<int>(
-                    value: _cameraFps,
+                    initialValue: _cameraFps,
                     decoration: const InputDecoration(
                       labelText: 'FPS deseados',
                       border: OutlineInputBorder(),
@@ -1368,7 +1368,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
                 SizedBox(
                   width: 200,
                   child: DropdownButtonFormField<String>(
-                    value: requestedCodecLabel,
+                    initialValue: requestedCodecLabel,
                     decoration: const InputDecoration(
                       labelText: 'Codec preferido',
                       border: OutlineInputBorder(),
@@ -1393,7 +1393,7 @@ class _DrowsyPageState extends ConsumerState<DrowsyPage> {
             ),
             const SizedBox(height: 12),
             DropdownButtonFormField<String>(
-              value: _frameOrientation,
+              initialValue: _frameOrientation,
               decoration: const InputDecoration(
                 labelText: 'Orientación del frame',
                 border: OutlineInputBorder(),

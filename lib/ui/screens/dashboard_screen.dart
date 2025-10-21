@@ -3,7 +3,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../models/events.dart';
 import '../../state/events_provider.dart';
-import '../../state/metrics_provider.dart';
 import '../../state/ws_provider.dart';
 import '../widgets/controls_panel.dart';
 import '../widgets/events_panel.dart';

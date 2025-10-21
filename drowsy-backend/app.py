@@ -11,9 +11,180 @@ from typing import Optional, Dict, Any, List, Tuple
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import mediapipe as mp
+from dotenv import load_dotenv
 
 # NUEVO: pipeline de drowsiness por eventos (parpadeo, micro-sueño, bostezo, pitch, frotado)
 from detection.pipeline import DrowsinessPipeline
+
+# =====================
+# Supabase (persistencia)
+# =====================
+from supabase import create_client, Client
+from supabase.lib.client_options import ClientOptions
+import concurrent.futures
+
+# Carga variables de entorno desde drowsy-backend/.env (si existe)
+load_dotenv(dotenv_path=os.path.join(os.path.dirname(__file__), ".env"))
+
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
+SUPABASE_KEY = (os.getenv("SUPABASE_SERVICE_ROLE_KEY", "") or os.getenv("SUPABASE_SERVICE_ROLE", "")).strip()
+
+supabase: Optional[Client] = None
+DEVICE_ID: Optional[int] = None
+SESSION_ID: Optional[int] = None
+
+# Identidad del dispositivo
+DEVICE_NAME = os.getenv("DEVICE_NAME", os.getenv("COMPUTERNAME", os.getenv("HOSTNAME", "SomnoDevice"))).strip()
+DEVICE_MODEL = os.getenv("DEVICE_MODEL", "UnknownModel").strip()
+
+# Buffers para inserts en lote (no bloquear el loop)
+METRICS_BUFFER: List[dict] = []
+EVENTS_BUFFER: List[dict] = []
+WINDOW_BUFFER: List[dict] = []
+
+# Locks
+buffers_lock = asyncio.Lock()
+
+# Límites/lotes
+MAX_METRICS_BATCH = 50
+MAX_EVENTS_BATCH = 50
+FLUSH_EVERY_SECS = 2.0
+
+# ThreadPool para no bloquear el event loop
+db_executor = concurrent.futures.ThreadPoolExecutor(max_workers=2)
+
+
+def _to_jsonable(obj):
+    """Convert numpy/scalars/arrays to JSON-serializable types recursively."""
+    try:
+        import numpy as _np  # type: ignore
+    except Exception:
+        _np = None
+
+    if isinstance(obj, dict):
+        return {k: _to_jsonable(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple, set)):
+        return [_to_jsonable(v) for v in obj]
+    if _np is not None:
+        if isinstance(obj, (_np.floating,)):
+            return float(obj)
+        if isinstance(obj, (_np.integer,)):
+            return int(obj)
+        if isinstance(obj, _np.ndarray):
+            return obj.tolist()
+    return obj
+
+# Reemplaza la función init_supabase en tu app.py
+
+def init_supabase() -> None:
+    """Inicializa el cliente supabase con schema 'public' (default)."""
+    global supabase
+    if not SUPABASE_URL or not SUPABASE_KEY:
+        print("⚠️ Supabase deshabilitado: faltan SUPABASE_URL o SUPABASE_SERVICE_ROLE_KEY")
+        supabase = None
+        return
+    
+    try:
+        # CAMBIO IMPORTANTE: Usar schema público (default)
+        # No especificamos schema, usa 'public' por defecto
+        supabase = create_client(
+            SUPABASE_URL,
+            SUPABASE_KEY,
+            options=ClientOptions(
+                postgrest_client_timeout=120_000,
+                storage_client_timeout=120_000
+            ),
+        )
+        
+        # Test de conexión
+        test_resp = supabase.table("devices").select("id").limit(1).execute()
+        print(f"✅ Supabase inicializado (schema=public, test ok: {len(test_resp.data) if test_resp.data else 0} devices)")
+        
+    except Exception as e:
+        print(f"❌ Error inicializando Supabase: {e}")
+        supabase = None
+
+def supa_upsert_device_by_name(name: str, model: str) -> Optional[int]:
+    """UPSERT de device por 'name' y retorna id."""
+    if not supabase:
+        return None
+    resp = supabase.table("devices").upsert({"name": name, "model": model}, on_conflict="name").execute()
+    data = resp.data or []
+    if not data:
+        # Si el driver no retorna filas en upsert, intentamos select
+        sel = supabase.table("devices").select("*").eq("name", name).limit(1).execute()
+        row = (sel.data or [None])[0]
+        return row["id"] if row else None
+    return data[0]["id"]
+
+def supa_create_session(device_id: int) -> Optional[int]:
+    if not supabase:
+        return None
+    resp = supabase.table("sessions").insert({"device_id": device_id}).execute()
+    data = resp.data or []
+    return data[0]["id"] if data else None
+
+def supa_upsert_device_config(device_id: int, cfg: Dict[str, Any]) -> None:
+    if not supabase:
+        return
+    payload = {
+        "device_id": device_id,
+        "ear_threshold": cfg.get("EAR_THRESHOLD"),
+        "mar_threshold": cfg.get("MAR_THRESHOLD"),
+        "pitch_deg_threshold": cfg.get("PITCH_DEG_THRESHOLD"),
+        "consec_frames": cfg.get("CONSEC_FRAMES"),
+        "w_ear": cfg.get("W_EAR"),
+        "w_mar": cfg.get("W_MAR"),
+        "w_pose": cfg.get("W_POSE"),
+        "fusion_threshold": cfg.get("FUSION_THRESHOLD"),
+        "use_python_alarm": cfg.get("USE_PYTHON_ALARM"),
+    }
+    supabase.table("device_config").upsert(payload, on_conflict="device_id").execute()
+
+def supa_insert_batch(table: str, rows: List[dict]) -> None:
+    """Inserta un lote en un hilo aparte (sin bloquear)."""
+    if not supabase or not rows:
+        return
+    try:
+        clean_rows = _to_jsonable(rows)
+        supabase.table(table).insert(clean_rows).execute()
+    except Exception as e:
+        print(f"[Supabase] Error batch insert en {table}: {e}")
+
+async def flush_loop():
+    """Cada FLUSH_EVERY_SECS envía lotes de METRICS/EVENTS/WINDOW_REPORTS."""
+    while running:
+        await asyncio.sleep(FLUSH_EVERY_SECS)
+        try:
+            async with buffers_lock:
+                metrics_batch = METRICS_BUFFER[:MAX_METRICS_BATCH]
+                events_batch = EVENTS_BUFFER[:MAX_EVENTS_BATCH]
+                window_batch = WINDOW_BUFFER[:MAX_EVENTS_BATCH]
+
+                del METRICS_BUFFER[:len(metrics_batch)]
+                del EVENTS_BUFFER[:len(events_batch)]
+                del WINDOW_BUFFER[:len(window_batch)]
+
+            if metrics_batch:
+                asyncio.get_running_loop().run_in_executor(db_executor, supa_insert_batch, "metrics", metrics_batch)
+            if events_batch:
+                asyncio.get_running_loop().run_in_executor(db_executor, supa_insert_batch, "events", events_batch)
+            if window_batch:
+                asyncio.get_running_loop().run_in_executor(db_executor, supa_insert_batch, "window_reports", window_batch)
+        except Exception as e:
+            print(f"[flush_loop] error: {e}")
+
+async def queue_metric(row: Dict[str, Any]):
+    async with buffers_lock:
+        METRICS_BUFFER.append(row)
+
+async def queue_event(row: Dict[str, Any]):
+    async with buffers_lock:
+        EVENTS_BUFFER.append(row)
+
+async def queue_window_report(row: Dict[str, Any]):
+    async with buffers_lock:
+        WINDOW_BUFFER.append(row)
 
 # =====================
 # Config inicial (umbrales y pesos)
@@ -21,7 +192,8 @@ from detection.pipeline import DrowsinessPipeline
 EAR_THRESHOLD_BASE = float(os.getenv("EAR_THRESHOLD", "0.18"))
 MAR_THRESHOLD_BASE = float(os.getenv("MAR_THRESHOLD", "0.60"))          # Bostezo
 PITCH_DEG_THRESHOLD_BASE = float(os.getenv("PITCH_DEG_THRESHOLD", "20")) # Cabeceo (grados)
-CONSEC_FRAMES_BASE = int(os.getenv("CONSEC_FRAMES", "50"))
+# Aumenta tiempo mínimo de ojos cerrados antes de alarma (~3s @30fps)
+CONSEC_FRAMES_BASE = int(os.getenv("CONSEC_FRAMES", "90"))
 FUSION_THRESHOLD_BASE = float(os.getenv("FUSION_THRESHOLD", "0.7"))
 
 EAR_THRESHOLD_SIGNS = float(os.getenv("EAR_SIGNS_THRESHOLD", str(EAR_THRESHOLD_BASE + 0.03)))
@@ -203,6 +375,11 @@ W_MAR = float(os.getenv("W_MAR", "0.3"))
 W_POSE = float(os.getenv("W_POSE", "0.2"))
 
 USE_PYTHON_ALARM = os.getenv("USE_PYTHON_ALARM", "1") == "1"
+# Histeresis/antirruido para alarma
+ALARM_GRACE_S = float(os.getenv("ALARM_GRACE_S", "5"))   # no sonar los primeros N segundos
+ALARM_HOLD_S = float(os.getenv("ALARM_HOLD_S", "3"))     # exigir N segundos sostenidos
+_APP_START_TS = time.time()
+_alarm_candidate_since = None  # tipo: Optional[float]
 
 # =====================
 # Configuración de video
@@ -267,7 +444,7 @@ def _normalize_orientation(value: str) -> str:
 
 
 def _config_dict() -> Dict[str, Any]:
-    """Snapshot del estado actual de configuración para exponer vía API."""
+    """Snapshot del estado actual de configuración para exponer vía API + persistencia device_config."""
     return {
         "EAR_THRESHOLD": EAR_THRESHOLD,
         "MAR_THRESHOLD": MAR_THRESHOLD,
@@ -686,6 +863,13 @@ async def set_config(cfg: dict):
 
         _update_preferred_video(CAMERA_CODEC, (CAMERA_WIDTH, CAMERA_HEIGHT), CAMERA_FPS)
 
+    # Persistimos configuración del device a Supabase
+    try:
+        if supabase and DEVICE_ID is not None:
+            supa_upsert_device_config(DEVICE_ID, _config_dict())
+    except Exception as e:
+        print(f"[device_config] no se pudo guardar: {e}")
+
     if USE_PYTHON_ALARM:
         if not pygame.mixer.get_init():
             try:
@@ -728,7 +912,26 @@ async def broadcast(payload: dict):
     if not clients:
         return
     dead = []
-    message = json.dumps(payload)
+    def _jsonify(obj):
+        try:
+            import numpy as _np  # local import to avoid global issues
+        except Exception:  # pragma: no cover
+            _np = None
+
+        if isinstance(obj, dict):
+            return {k: _jsonify(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple, set)):
+            return [_jsonify(v) for v in obj]
+        if _np is not None:
+            if isinstance(obj, (_np.floating,)):
+                return float(obj)
+            if isinstance(obj, (_np.integer,)):
+                return int(obj)
+            if isinstance(obj, _np.ndarray):
+                return obj.tolist()
+        return obj
+
+    message = json.dumps(_jsonify(payload), ensure_ascii=False)
     for c in clients:
         try:
             await c.send_text(message)
@@ -744,16 +947,47 @@ async def broadcast(payload: dict):
 async def handle_event(e: dict):
     """
     Dispara alarma (opcional) en eventos críticos y reenvía el evento a los clientes.
+    Además, guarda los eventos en Supabase (somno.events / somno.window_reports).
     """
     global is_drowsy
     etype = e.get("type")
 
     # Alarma ante micro-sueño, cabeceo o bostezo prolongado
     if etype in ("micro_sleep", "pitch_down", "yawn"):
-        is_drowsy = True
-        if USE_PYTHON_ALARM and pygame.mixer.get_init():
-            if not pygame.mixer.music.get_busy():
-                pygame.mixer.music.play(-1)
+        # Respeta periodo de gracia inicial
+        if time.time() - _APP_START_TS >= ALARM_GRACE_S:
+            is_drowsy = True
+            if USE_PYTHON_ALARM and pygame.mixer.get_init():
+                # Los detectores ya exigen duración (>=3s), así que no agregamos hold adicional aquí
+                if not pygame.mixer.music.get_busy():
+                    pygame.mixer.music.play(-1)
+
+    # Persistencia de eventos
+    try:
+        if supabase and SESSION_ID:
+            ts_ms = e.get("ts") or int(time.time() * 1000)
+            # report_window: guardar en window_reports
+            if etype == "report_window":
+                report = {
+                    "session_id": SESSION_ID,
+                    "window_s": e.get("window_s"),
+                    "counts": e.get("counts"),
+                    "durations": e.get("durations"),
+                    "ts": None  # default NOW() en DB
+                }
+                await queue_window_report(report)
+            else:
+                evt_row = {
+                    "session_id": SESSION_ID,
+                    "type": etype,
+                    "ts": ts_ms,
+                    "duration_s": e.get("duration_s"),
+                    "hand": e.get("hand"),
+                    "payload": e,
+                }
+                await queue_event(evt_row)
+    except Exception as ex:
+        print(f"[Supabase event] error: {ex}")
 
     # Difundir cualquier evento (incluye report_window, eye_blink, frame_overlay)
     payload = {"message_type": "event", **e}
@@ -923,14 +1157,23 @@ async def camera_loop():
                     or closed_frames >= CONSEC_FRAMES
                 )
 
-                if should_alarm:
-                    is_drowsy = True
-                    cv2.putText(processed, 'ALERTA DE SOMNOLENCIA!', (10, y0),
-                                cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
-                    if USE_PYTHON_ALARM and pygame.mixer.get_init():
-                        if not pygame.mixer.music.get_busy():
-                            pygame.mixer.music.play(-1)
+                now_ts = time.time()
+                if should_alarm and (now_ts - _APP_START_TS >= ALARM_GRACE_S):
+                    # Histeresis: exigir ALARM_HOLD_S de condición sostenida
+                    global _alarm_candidate_since
+                    if _alarm_candidate_since is None:
+                        _alarm_candidate_since = now_ts
+                    held = (now_ts - _alarm_candidate_since) >= ALARM_HOLD_S
+                    if held:
+                        is_drowsy = True
+                        cv2.putText(processed, 'ALERTA DE SOMNOLENCIA!', (10, y0),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 255), 3)
+                        if USE_PYTHON_ALARM and pygame.mixer.get_init():
+                            if not pygame.mixer.music.get_busy():
+                                pygame.mixer.music.play(-1)
                 else:
+                    # Reset candidato y apagar si estaba sonando
+                    _alarm_candidate_since = None
                     if is_drowsy:
                         is_drowsy = False
                         if USE_PYTHON_ALARM and pygame.mixer.get_init():
@@ -1014,6 +1257,28 @@ async def camera_loop():
                 }
                 await broadcast(payload)
 
+                # === Persistencia de métricas (cada 5 frames) ===
+                try:
+                    if supabase and SESSION_ID:
+                        metric_row = {
+                            "session_id": SESSION_ID,
+                            "ear": last_ear,
+                            "mar": last_mar,
+                            "yaw": last_yaw,
+                            "pitch": last_pitch,
+                            "roll": last_roll,
+                            "fused_score": fused_value,
+                            "closed_frames": closed_frames,
+                            "is_drowsy": is_drowsy,
+                            "reason": reason,
+                            # Si quieres, puedes guardar los frames (cuidado tamaño):
+                            # "raw_frame_b64": raw_b64,
+                            # "processed_frame_b64": proc_b64,
+                        }
+                        await queue_metric(metric_row)
+                except Exception as e:
+                    print(f"[Supabase metrics] error: {e}")
+
             # === NUEVO: pipeline de eventos de somnolencia (usa el frame BGR crudo) ===
             try:
                 events = pipeline.step(frame)
@@ -1025,7 +1290,8 @@ async def camera_loop():
 
             await asyncio.sleep(0.033)
     finally:
-        cap.release()
+        if cap:
+            cap.release()
         if pygame.mixer.get_init():
             pygame.mixer.quit()
         print("Cámara liberada")
@@ -1033,13 +1299,49 @@ async def camera_loop():
 @app.on_event("startup")
 async def on_start():
     print("🚀 Iniciando servidor de detección de somnolencia...")
+
+    # Supabase
+    init_supabase()
+    global DEVICE_ID, SESSION_ID
+    try:
+        if supabase:
+            DEVICE_ID = supa_upsert_device_by_name(DEVICE_NAME, DEVICE_MODEL)
+            if DEVICE_ID is not None:
+                SESSION_ID = supa_create_session(DEVICE_ID)
+                print(f"📦 Device ID: {DEVICE_ID} | Session ID: {SESSION_ID}")
+                # Guarda config inicial del device
+                supa_upsert_device_config(DEVICE_ID, _config_dict())
+            else:
+                print("⚠️ No se pudo registrar el dispositivo en Supabase.")
+    except Exception as e:
+        print(f"[startup] Supabase error: {e}")
+
+    # Loops
     asyncio.create_task(camera_loop())
+    asyncio.create_task(flush_loop())
 
 @app.on_event("shutdown")
 async def on_shutdown():
     global running
     running = False
     print("🛑 Cerrando servidor...")
+    # Flush final
+    try:
+        async with buffers_lock:
+            metrics_batch = METRICS_BUFFER[:]
+            events_batch = EVENTS_BUFFER[:]
+            window_batch = WINDOW_BUFFER[:]
+            METRICS_BUFFER.clear()
+            EVENTS_BUFFER.clear()
+            WINDOW_BUFFER.clear()
+        if metrics_batch:
+            supa_insert_batch("metrics", metrics_batch)
+        if events_batch:
+            supa_insert_batch("events", events_batch)
+        if window_batch:
+            supa_insert_batch("window_reports", window_batch)
+    except Exception as e:
+        print(f"[shutdown flush] error: {e}")
 
 @app.get("/")
 def root():
@@ -1053,11 +1355,27 @@ def root():
 
 @app.get("/health")
 def health():
+    supa_ok = False
+    supa_err = None
+    try:
+        if supabase:
+            # Verificación real contra la tabla devices en el esquema activo
+            resp = supabase.table("devices").select("id").limit(1).execute()
+            # Si no lanza excepción y data es lista (aunque vacía), consideramos ok
+            if hasattr(resp, "data"):
+                supa_ok = True
+    except Exception as e:
+        supa_err = str(e)
+
     return {
         "status": "healthy",
         "camera_active": running,
         "clients_connected": len(clients),
         "current_config": _config_dict(),
+        "supabase": bool(supabase),
+        "supabase_check": {"ok": supa_ok, "error": supa_err},
+        "device_id": DEVICE_ID,
+        "session_id": SESSION_ID,
     }
 
 # Run:

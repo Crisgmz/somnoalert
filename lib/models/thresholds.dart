@@ -40,15 +40,15 @@ class ThresholdTierConfig {
   }
 
   factory ThresholdTierConfig.fromJson(Map<String, dynamic> json, {ThresholdTierConfig? fallback}) {
-    double _double(dynamic value, double orElse) => (value as num?)?.toDouble() ?? orElse;
-    int _int(dynamic value, int orElse) => (value as num?)?.toInt() ?? orElse;
+    double asDouble(dynamic value, double orElse) => (value as num?)?.toDouble() ?? orElse;
+    int asInt(dynamic value, int orElse) => (value as num?)?.toInt() ?? orElse;
 
     return ThresholdTierConfig(
-      ear: _double(json['ear'], fallback?.ear ?? 0.18),
-      mar: _double(json['mar'], fallback?.mar ?? 0.6),
-      pitch: _double(json['pitch'], fallback?.pitch ?? 20),
-      fusion: _double(json['fusion'], fallback?.fusion ?? 0.7),
-      consecFrames: _int(json['consecFrames'], fallback?.consecFrames ?? 50),
+      ear: asDouble(json['ear'], fallback?.ear ?? 0.18),
+      mar: asDouble(json['mar'], fallback?.mar ?? 0.6),
+      pitch: asDouble(json['pitch'], fallback?.pitch ?? 20),
+      fusion: asDouble(json['fusion'], fallback?.fusion ?? 0.7),
+      consecFrames: asInt(json['consecFrames'], fallback?.consecFrames ?? 50),
     );
   }
 }

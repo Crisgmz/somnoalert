@@ -265,8 +265,8 @@ class _SliderRow extends StatelessWidget {
     required this.min,
     required this.max,
     required this.onChanged,
-    this.divisions,
     this.decimals = 2,
+    this.divisions,
     this.suffix,
   });
 
@@ -455,7 +455,7 @@ class _TierEditor extends StatelessWidget {
           ),
         ),
         Slider(
-          value: tier.consecFrames.toDouble().clamp(1, 300),
+          value: tier.consecFrames.clamp(1, 300).toDouble(),
           min: 1,
           max: 300,
           divisions: 299,

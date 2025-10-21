@@ -8,8 +8,9 @@ from .drowsiness_features.pitch.processing import PitchDetector  # <— AÑADIR
 
 class DrowsinessPipeline:
     def __init__(self):
-        self.fms = FlickerAndMicroSleep(microsleep_s=2.0, report_window_s=60.0)
-        self.yawn = YawnDetector(hold_s=4.0, window_s=180.0)
+        # Requiere cierre continuo >=3s para microsueño y bostezo >=3s
+        self.fms = FlickerAndMicroSleep(microsleep_s=3.0, report_window_s=60.0)
+        self.yawn = YawnDetector(hold_s=3.0, window_s=180.0)
         self.rub  = EyeRubDetector(dist_px=40.0, hold_s=1.0, window_s=300.0)
         self.pitch = PitchDetector(hold_s=3.0, window_s=180.0, ratio_threshold=1.0)  # <— AÑADIR
 

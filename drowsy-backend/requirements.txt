@@ -4,3 +4,6 @@ numpy
 pygame
 fastapi
 uvicorn[standard]
+supabase>=2.5.0
+python-dotenv>=1.0.1
+tenacity>=8.2.3
